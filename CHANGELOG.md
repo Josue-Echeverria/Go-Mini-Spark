@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.1.1 (2025-11-19)
+
+### Bug Fixes
+
+- Diagrams directory
+  ([`cf97676`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/cf9767687090e46f2b702d4eeb5bf22402fa30e5))
+
+
 ## v0.1.0 (2025-11-18)
 
 
