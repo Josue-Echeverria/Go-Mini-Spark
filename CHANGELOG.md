@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.1.2 (2025-11-19)
+
+### Bug Fixes
+
+- Added Comunication.drawio
+  ([`70c4708`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/70c47089dfe94d330b7df01da6f9b5ce410c3c79))
+
+
 ## v0.1.1 (2025-11-19)
 
 ### Bug Fixes
