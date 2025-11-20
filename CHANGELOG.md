@@ -1,6 +1,16 @@
 # CHANGELOG
 
 
+## v0.2.0 (2025-11-20)
+
+### Features
+
+- Simplification of code
+  ([`44de7d0`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/44de7d0d611c5b1d37eca30e267720c4015a0d9c))
+
+deleted most of the boiler plate to start the actual architecture
+
+
 ## v0.1.2 (2025-11-19)
 
 ### Bug Fixes
