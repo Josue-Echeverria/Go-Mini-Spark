@@ -1,16 +1,16 @@
 package main
 
 import (
-	"Go-Mini-Spark/pkg/rdd"
 	"fmt"
 	"strings"
+	. "Go-Mini-Spark/pkg/driver"
 )
 
 func main() {
-	driver := rdd.NewDriver("localhost:9000") // Se conecta al Master
+	driver := ConnectDriver("localhost:9000") // Se conecta al Driver
 
 	// Crear un RDD
-	rddData := driver.TextFile("data.txt")
+	rddData := ReadRDDTextFile("data.txt", driver)
 
 	// Transformaciones LÓGICAS (no ejecutan nada)
 	rdd2 := rddData.Map(func(x string) string {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"Go-Mini-Spark/pkg/types"
+	"flag"
 	"log"
 	"net"
 	"net/rpc"
+	"strconv"
 )
 
 type Worker struct {
@@ -15,9 +17,9 @@ type Worker struct {
 	Endpoint  string
 }
 
-func NewWorker(masterAddress, address string, maxTasks int) *Worker {
+func NewWorker(driverAddress, address string, maxTasks int) *Worker {
 	return &Worker{
-		ID:        1, // Will be assigned by master
+		ID:        1, // Will be assigned by driver
 		Partition: make(map[int]types.Partition),
 		TaskQueue: make([]string, 0),
 		Status:    0,
@@ -25,39 +27,54 @@ func NewWorker(masterAddress, address string, maxTasks int) *Worker {
 	}
 }
 
-func ExecuteTask(task types.Task) string {
-	return ""
+// ExecuteTask RPC method - must be exported
+func (w *Worker) ExecuteTask(task types.Task, reply *string) error {
+	log.Printf("Worker %d executing task %s\n", w.ID, task.ID)
+	*reply = "Task executed successfully"
+	return nil
 }
 
-func StorePartition(partitionID string, data []byte) error {
+// GetStatus RPC method
+func (w *Worker) GetStatus(args struct{}, reply *int) error {
+	*reply = w.Status
+	return nil
+}
+
+// StorePartition stores a partition on this worker
+func (w *Worker) StorePartition(partitionID int, data []byte) error {
+	w.Partition[partitionID] = types.Partition{
+		ID:   partitionID,
+		Data: data,
+	}
 	return nil
 }
 
 func SendResultToDriver(result string) {
 }
 
-func (w *Worker) Start(masterAddress string) {
-	log.Printf("Worker %d starting and connecting to master at %s\n", w.ID, masterAddress)
+func (w *Worker) Start(driverAddress string) {
+	log.Printf("Worker %d starting and connecting to driver at %s\n", w.ID, driverAddress)
 
-	client, err := rpc.Dial("tcp", masterAddress)
+	client, err := rpc.Dial("tcp", driverAddress)
 	if err != nil {
-		log.Fatal("Error connecting to master:", err)
+		log.Fatal("Error connecting to driver:", err)
 	}
 
 	var reply bool
-	err = client.Call("Master.RegisterWorker", *w, &reply)
+	err = client.Call("Driver.RegisterWorker", *w, &reply)
 	if err != nil {
-		log.Fatal("Error registering with master:", err)
+		log.Fatal("Error registering with driver:", err)
 	}
 
 	if reply {
-		log.Printf("Worker %d successfully registered with master\n", w.ID)
+		log.Printf("Worker %d successfully registered with driver\n", w.ID)
 	} else {
 		log.Printf("Worker %d registration failed\n", w.ID)
 	}
 
 	client.Close()
 
+	// Register RPC methods
 	rpc.Register(w)
 	listener, err := net.Listen("tcp", w.Endpoint)
 	if err != nil {
@@ -69,6 +86,28 @@ func (w *Worker) Start(masterAddress string) {
 }
 
 func main() {
-	worker := NewWorker("localhost:9000", "localhost:9100", 10)
-	worker.Start("localhost:9000")
+	driverAddress := flag.String("driver", "localhost:9000", "Driver address (host:port)")
+	workerAddress := flag.String("address", "localhost:9100", "Worker address (host:port)")
+	maxTasks := flag.Int("max-tasks", 10, "Maximum number of tasks to handle")
+
+	flag.Parse()
+
+	// Support positional arguments
+	args := flag.Args()
+	if len(args) >= 1 {
+		*driverAddress = args[0]
+	}
+	if len(args) >= 2 {
+		*workerAddress = args[1]
+	}
+	if len(args) >= 3 {
+		if val, err := strconv.Atoi(args[2]); err == nil {
+			*maxTasks = val
+		}
+	}
+
+	log.Printf("Starting worker with driver=%s, address=%s, max-tasks=%d\n", *driverAddress, *workerAddress, *maxTasks)
+
+	worker := NewWorker(*driverAddress, *workerAddress, *maxTasks)
+	worker.Start(*driverAddress)
 }

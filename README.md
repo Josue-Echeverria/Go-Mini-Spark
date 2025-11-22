@@ -120,7 +120,7 @@ GET /api/status
 
 ```
 .
-├── master/          # Servidor Master
+├── driver/          # Servidor Master
 ├── worker/          # Servidor Worker
 ├── client/          # Cliente CLI
 ├── pkg/
