@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	. "Go-Mini-Spark/pkg/driver"
 )
 
@@ -13,13 +12,9 @@ func main() {
 	rddData := ReadRDDTextFile("data.txt", driver)
 
 	// Transformaciones LÓGICAS (no ejecutan nada)
-	rdd2 := rddData.Map(func(x string) string {
-		return strings.ToUpper(x)
-	})
+	rdd2 := rddData.Map()
 
-	rdd3 := rdd2.Filter(func(x string) bool {
-		return len(x) > 3
-	})
+	rdd3 := rdd2.Filter()
 
 	// Acción -> aquí sí se ejecuta en los workers
 	result := rdd3.Collect()

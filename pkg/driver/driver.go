@@ -7,25 +7,12 @@ import (
 	"net/rpc"
 	"sync/atomic"
 )
-
-type TransformationType int
 var rddCounter uint64
-const (
-    MapOp TransformationType = iota
-    FilterOp
-)
-
-type Task struct {
-	ID          int
-	PartitionID int
-	Transformations []Transformation
-	ExecuteFunc func(data interface{}) interface{}
-}
 
 type Driver struct {
 	Workers      map[int]types.WorkerInfo
 	Jobs         map[string]*types.Job
-	Tasks        map[string]*Task
+	Tasks        map[string]*types.Task
 	PartitionMap map[int]int
 	RDDRegistry  map[int]*RDD
 	DriverAddress string
@@ -41,15 +28,10 @@ type DriverInfo struct {
     Port         string
 }
 
-type Transformation struct {
-    Type TransformationType
-    Func interface{}
-}
-
 type RDD struct {
     ID           int
     Parent       *RDD
-    Transformations []Transformation
+    Transformations []types.Transformation
     NumPartitions int
 	Partitions   []int
 	Driver *Driver
@@ -75,7 +57,7 @@ func ConnectDriver(masterAddress string) *Driver {
     driver := &Driver{
         Workers:       driverInfo.Workers,
         Jobs:          make(map[string]*types.Job),
-        Tasks:         make(map[string]*Task),
+        Tasks:         make(map[string]*types.Task),
         PartitionMap:  driverInfo.PartitionMap,
         RDDRegistry:   make(map[int]*RDD),
         Client:        client,
@@ -95,7 +77,7 @@ func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
     return nil
 }
 
-func (r *RDD) Map(f interface{}) *RDD {
+func (r *RDD) Map() *RDD {
     newRDD := &RDD{
         ID:             newID(),
         Parent:         r,
@@ -105,9 +87,9 @@ func (r *RDD) Map(f interface{}) *RDD {
     }
 
     // agregamos la transformación pendiente
-    newRDD.Transformations = append(newRDD.Transformations, Transformation{
-        Type: MapOp,
-        Func: f,
+    newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
+        Type: types.MapOp,
+        FuncName: "ToUpper",
     })
 
 	r.Driver.RegisterRDD(newRDD)
@@ -115,7 +97,7 @@ func (r *RDD) Map(f interface{}) *RDD {
     return newRDD
 }
 
-func (r *RDD) Filter(f interface{}) *RDD {
+func (r *RDD) Filter() *RDD {
     newRDD := &RDD{
         ID:             newID(),
         Parent:         r,
@@ -124,9 +106,9 @@ func (r *RDD) Filter(f interface{}) *RDD {
         Driver:         r.Driver,
     }
 
-    newRDD.Transformations = append(newRDD.Transformations, Transformation{
-        Type: FilterOp,
-        Func: f,
+    newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
+        Type: types.FilterOp,
+        FuncName: "FilterLong",
     })
 
 	r.Driver.RegisterRDD(newRDD)
@@ -143,46 +125,57 @@ func (r *RDD) Filter(f interface{}) *RDD {
 // // recibe el resultado parcial
 // Combina los resultados y los devuelve al usuario.
 
-func (r *RDD) Collect() []string {
-	log.Printf("Collecting data from RDD %d\n", r.ID)
-	log.Printf("Applying %d transformations\n", len(r.Transformations))
-	log.Printf("Data: %v\n", r.Data)
+func (r *RDD) Collect() []interface{} {
 
-	pipeline := []Transformation{}
+	// Construir el pipeline de transformaciones
+	pipeline := []types.Transformation{}
 	curr := r
 	for curr != nil {
-		pipeline = append([]Transformation{}, curr.Transformations...)
+		pipeline = append([]types.Transformation{}, curr.Transformations...)
 		curr = curr.Parent
 	}
 
+	// Invertir el pipeline para que las transformaciones se apliquen en el orden correcto
 	for i, j := 0, len(pipeline)-1; i < j; i, j = i+1, j-1 {
         pipeline[i], pipeline[j] = pipeline[j], pipeline[i]
     }
 
-	tasks := []Task{}
-
+	// Crear tareas para cada partición
+	tasks := []types.Task{}
 	for partitionID := range r.Partitions {
-		task := Task{
+		task := types.Task{
 			PartitionID:     partitionID,
 			Transformations: pipeline,  // el pipeline ya invertido
 		}
 	
 		tasks = append(tasks, task)
 	}
-	
+
+	results := []interface{}{}
 	for _, task := range tasks {
-		log.Printf("Sending task for partition %d to worker %d\n", task.PartitionID, r.Driver.PartitionMap[task.PartitionID])
-		// Aquí se enviaría la tarea al worker correspondiente y se recogería el resultado
+		log.Printf("Sending task for partition %d to worker %d : %s\n", task.PartitionID, r.Driver.PartitionMap[task.PartitionID], r.Driver.Workers[r.Driver.PartitionMap[task.PartitionID]].Endpoint)
+		
+		workerID := r.Driver.PartitionMap[task.PartitionID]
+		worker := r.Driver.Workers[workerID]
+
+		var reply types.TaskReply
+		client, err := rpc.Dial("tcp", worker.Endpoint)
+		if err != nil {
+			log.Fatal("Error connecting to worker:", err)
+		}
+		client.Call("Worker.ExecuteTask", task, &reply)
+
+		results = append(results, reply.Data)
 	}
 
-	return r.Data
+	return results
 }
 
 func NewDriver(port string) *Driver {
 	return &Driver{
 		Workers:      make(map[int]types.WorkerInfo),
 		Jobs:         make(map[string]*types.Job),
-		Tasks:        make(map[string]*Task),
+		Tasks:        make(map[string]*types.Task),
 		PartitionMap: make(map[int]int),
 		Port:         port,
 	}
