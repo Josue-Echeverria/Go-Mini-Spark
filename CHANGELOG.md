@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.3.0 (2025-11-22)
+
+### Features
+
+- Progress in the collect() func and .bat files fixed
+  ([`76462ed`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/76462ed2e051428b4c18f673f941d7edb029d359))
+
+
 ## v0.2.0 (2025-11-20)
 
 ### Features
