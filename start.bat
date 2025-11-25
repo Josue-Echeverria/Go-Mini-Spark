@@ -4,19 +4,19 @@ if not exist "bin\" mkdir bin
 
 start "Driver" bin\Driver.exe -port 9000
 
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 start "Worker 1" bin\worker.exe localhost:9000 localhost:9100
 
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 start "Worker 2" bin\worker.exe localhost:9000 localhost:9101
 
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 start "Worker 3" bin\worker.exe localhost:9000 localhost:9102
 
-timeout /t 3 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 start "Worker 4" bin\worker.exe localhost:9000 localhost:9103
 

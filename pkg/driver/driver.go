@@ -2,44 +2,60 @@ package driver
 
 import (
 	"Go-Mini-Spark/pkg/types"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/rpc"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 )
+
 var rddCounter uint64
 
 type Driver struct {
-	Workers      map[int]types.WorkerInfo
-	Jobs         map[string]*types.Job
-	Tasks        map[string]*types.Task
-	PartitionMap map[int]int
-	RDDRegistry  map[int]*RDD
-	DriverAddress string
-	Client        *rpc.Client
-	Port         string
+	Workers         map[int]types.WorkerInfo
+	Jobs            map[string]*types.Job
+	Tasks           map[string]*types.Task
+	PartitionMap    map[int]int
+	PartitionData   map[int][]string
+	RDDRegistry     map[int]*RDD
+	DriverAddress   string
+	Client          *rpc.Client
+	Port            string
 	nextPartitionID int
+	StateDir        string
 }
 
 // Serializable info about the Driver
 type DriverInfo struct {
-    Workers      map[int]types.WorkerInfo
-    PartitionMap map[int]int
-    Port         string
+	Workers      map[int]types.WorkerInfo
+	PartitionMap map[int]int
+	Port         string
 }
 
 type RDD struct {
-    ID           int
-    Parent       *RDD
-    Transformations []types.Transformation
-    NumPartitions int
-	Partitions   []int
-	Driver *Driver
-	Data   []string
+	ID              int
+	Parent          *RDD
+	Transformations []types.Transformation
+	NumPartitions   int
+	Partitions      []int // IDs de particiones
+	Driver          *Driver
+	Data            []string
 }
 
 func newID() int {
-    return int(atomic.AddUint64(&rddCounter, 1))
+	return int(atomic.AddUint64(&rddCounter, 1))
+}
+
+func keys(m map[int]types.WorkerInfo) []int {
+	result := make([]int, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	return result
 }
 
 func ConnectDriver(masterAddress string) *Driver {
@@ -47,73 +63,75 @@ func ConnectDriver(masterAddress string) *Driver {
 	if err != nil {
 		log.Fatal("Error connecting to master:", err)
 	}
-	
-    var driverInfo DriverInfo
-    err = client.Call("Driver.GetDriver", struct{}{}, &driverInfo)
+
+	var driverInfo DriverInfo
+	err = client.Call("Driver.GetDriver", struct{}{}, &driverInfo)
 	if err != nil {
 		log.Fatal("Error registering with driver:", err)
 	}
 
-    driver := &Driver{
-        Workers:       driverInfo.Workers,
-        Jobs:          make(map[string]*types.Job),
-        Tasks:         make(map[string]*types.Task),
-        PartitionMap:  driverInfo.PartitionMap,
-        RDDRegistry:   make(map[int]*RDD),
-        Client:        client,
-        DriverAddress: masterAddress,
-        Port:          driverInfo.Port,
-    }
+	driver := &Driver{
+		Workers:       driverInfo.Workers,
+		Jobs:          make(map[string]*types.Job),
+		Tasks:         make(map[string]*types.Task),
+		PartitionData: make(map[int][]string),
+		PartitionMap:  driverInfo.PartitionMap,
+		RDDRegistry:   make(map[int]*RDD),
+		Client:        client,
+		DriverAddress: masterAddress,
+		Port:          driverInfo.Port,
+	}
 
-    return driver
+	return driver
 }
 
 func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
-    *reply = DriverInfo{
-        Workers:      d.Workers,
-        PartitionMap: d.PartitionMap,
-        Port:         d.Port,
-    }
-    return nil
+	*reply = DriverInfo{
+		Workers:      d.Workers,
+		PartitionMap: d.PartitionMap,
+		Port:         d.Port,
+	}
+	return nil
 }
 
 func (r *RDD) Map() *RDD {
-    newRDD := &RDD{
-        ID:             newID(),
-        Parent:         r,
-        NumPartitions:  r.NumPartitions,
-		Partitions:     r.Partitions,
-        Driver:         r.Driver,
-    }
+	newRDD := &RDD{
+		ID:            newID(),
+		Parent:        r,
+		NumPartitions: r.NumPartitions,
+		Partitions:    r.Partitions,
+		Driver:        r.Driver,
+	}
 
-    // agregamos la transformación pendiente
-    newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
-        Type: types.MapOp,
-        FuncName: "ToUpper",
-    })
+	// agregamos la transformación pendiente
+	newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
+		Type:     types.MapOp,
+		FuncName: "ToUpper",
+	})
 
 	r.Driver.RegisterRDD(newRDD)
 
-    return newRDD
+	return newRDD
 }
 
 func (r *RDD) Filter() *RDD {
-    newRDD := &RDD{
-        ID:             newID(),
-        Parent:         r,
-        NumPartitions:  r.NumPartitions,
-		Partitions:     r.Partitions,
-        Driver:         r.Driver,
-    }
 
-    newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
-        Type: types.FilterOp,
-        FuncName: "FilterLong",
-    })
+	newRDD := &RDD{
+		ID:            newID(),
+		Parent:        r,
+		NumPartitions: r.NumPartitions,
+		Partitions:    r.Partitions,
+		Driver:        r.Driver,
+	}
+
+	newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
+		Type:     types.FilterOp,
+		FuncName: "FilterLong",
+	})
 
 	r.Driver.RegisterRDD(newRDD)
 
-    return newRDD
+	return newRDD
 }
 
 // Recorre el lineage hacia atrás para obtener todas las transformaciones.
@@ -127,34 +145,36 @@ func (r *RDD) Filter() *RDD {
 
 func (r *RDD) Collect() []interface{} {
 
-	// Construir el pipeline de transformaciones
+	// Construir el pipeline de transformaciones recorriendo el lineage
 	pipeline := []types.Transformation{}
 	curr := r
 	for curr != nil {
-		pipeline = append([]types.Transformation{}, curr.Transformations...)
+		// Prepender las transformaciones de este RDD al inicio del pipeline
+		pipeline = append(curr.Transformations, pipeline...)
 		curr = curr.Parent
 	}
 
-	// Invertir el pipeline para que las transformaciones se apliquen en el orden correcto
-	for i, j := 0, len(pipeline)-1; i < j; i, j = i+1, j-1 {
-        pipeline[i], pipeline[j] = pipeline[j], pipeline[i]
-    }
+	log.Printf("Complete pipeline of transformations: %v\n", pipeline)
 
 	// Crear tareas para cada partición
 	tasks := []types.Task{}
-	for partitionID := range r.Partitions {
+	i := 0
+	for _, partitionID := range r.Partitions {
 		task := types.Task{
+			ID:              i,
 			PartitionID:     partitionID,
-			Transformations: pipeline,  // el pipeline ya invertido
+			Data:            r.Driver.PartitionData[partitionID],
+			Transformations: pipeline,
 		}
-	
+		i++
+		// log.Printf("data: %v", r.Driver.PartitionData[partitionID])
 		tasks = append(tasks, task)
 	}
 
 	results := []interface{}{}
 	for _, task := range tasks {
 		log.Printf("Sending task for partition %d to worker %d : %s\n", task.PartitionID, r.Driver.PartitionMap[task.PartitionID], r.Driver.Workers[r.Driver.PartitionMap[task.PartitionID]].Endpoint)
-		
+
 		workerID := r.Driver.PartitionMap[task.PartitionID]
 		worker := r.Driver.Workers[workerID]
 
@@ -165,6 +185,7 @@ func (r *RDD) Collect() []interface{} {
 		}
 		client.Call("Worker.ExecuteTask", task, &reply)
 
+		log.Printf("Received result: %s\n", reply.Data)
 		results = append(results, reply.Data)
 	}
 
@@ -173,18 +194,14 @@ func (r *RDD) Collect() []interface{} {
 
 func NewDriver(port string) *Driver {
 	return &Driver{
-		Workers:      make(map[int]types.WorkerInfo),
-		Jobs:         make(map[string]*types.Job),
-		Tasks:        make(map[string]*types.Task),
-		PartitionMap: make(map[int]int),
-		Port:         port,
+		Workers:       make(map[int]types.WorkerInfo),
+		Jobs:          make(map[string]*types.Job),
+		Tasks:         make(map[string]*types.Task),
+		PartitionData: make(map[int][]string),
+		PartitionMap:  make(map[int]int),
+		Port:          port,
+		StateDir:      "driver_state",
 	}
-}
-
-func runJob() {
-}
-
-func assignTask(partitionID string, workerID string) {
 }
 
 func (d *Driver) RegisterWorker(info types.WorkerInfo, reply *bool) error {
@@ -195,50 +212,150 @@ func (d *Driver) RegisterWorker(info types.WorkerInfo, reply *bool) error {
 }
 
 func (d *Driver) allocatePartitions(r *RDD) {
-    if len(d.Workers) == 0 {
-        panic("No workers connected")
-    }
-
-	workerIDs := make([]int, 0, len(d.Workers))
-	for id := range d.Workers {
-		workerIDs = append(workerIDs, id)
-	}
-
+	workerIDs := keys(d.Workers)
 	r.Partitions = make([]int, r.NumPartitions)
 
+	if len(workerIDs) == 0 {
+		log.Fatal("No workers available to allocate partitions")
+	}
+
 	for i := 0; i < r.NumPartitions; i++ {
+
 		partitionID := d.nextPartitionID
 		d.nextPartitionID++
 
-		// Assign workers round-robin
 		worker := workerIDs[i%len(workerIDs)]
-
 		d.PartitionMap[partitionID] = worker
 		r.Partitions[i] = partitionID
+
+		client, err := rpc.Dial("tcp", d.Workers[worker].Endpoint)
+		if err != nil {
+			log.Fatal("Error connecting to worker:", err)
+		}
+		var reply bool
+		client.Call("Worker.RegisterPartition", partitionID, &reply)
+		client.Close()
 	}
 }
 
 func (d *Driver) RegisterRDD(r *RDD) *RDD {
-    d.RDDRegistry[r.ID] = r
+	d.RDDRegistry[r.ID] = r
 
 	// If root RDD, allocate partitions
-    if r.Parent == nil {
-        d.allocatePartitions(r)
-    }
-    return r
+	if r.Parent == nil {
+		d.allocatePartitions(r)
+	}
+	return r
 }
 
-func ReadRDDTextFile(filename string, driver *Driver) *RDD {
-	// Simular lectura de archivo por ahora
-	data := []string{"hello world", "spark is great", "go programming", "distributed computing"}
-	rdd := &RDD{
-		ID:             newID(),
-		Parent:         nil,
-		NumPartitions:  4,
-		Driver:         driver,
-		Data:           data,
+// SaveJobState persiste el estado de un job a un archivo JSON
+func (d *Driver) SaveJobState(jobID string) error {
+	// Crear directorio si no existe
+	if err := os.MkdirAll(d.StateDir, 0755); err != nil {
+		return err
 	}
-	driver.RegisterRDD(rdd)
+
+	job, exists := d.Jobs[jobID]
+	if !exists {
+		return fmt.Errorf("job %s not found", jobID)
+	}
+
+	// Serializar job a JSON
+	data, err := json.MarshalIndent(job, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Guardar en archivo
+	filePath := filepath.Join(d.StateDir, jobID+".json")
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// LoadJobState carga el estado de un job desde un archivo JSON
+func (d *Driver) LoadJobState(jobID string) (*types.Job, error) {
+	filePath := filepath.Join(d.StateDir, jobID+".json")
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var job types.Job
+	if err := json.Unmarshal(data, &job); err != nil {
+		return nil, err
+	}
+
+	return &job, nil
+}
+
+// SaveAllJobStates persiste todos los jobs registrados
+func (d *Driver) SaveAllJobStates() error {
+	for jobID := range d.Jobs {
+		if err := d.SaveJobState(jobID); err != nil {
+			log.Printf("Error saving job state for %s: %v\n", jobID, err)
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadAllJobStates carga todos los jobs desde archivos
+func (d *Driver) LoadAllJobStates() error {
+	entries, err := os.ReadDir(d.StateDir)
+	if err != nil {
+		// Si el directorio no existe, es normal en la primera ejecución
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			jobID := strings.TrimSuffix(entry.Name(), ".json")
+			job, err := d.LoadJobState(jobID)
+			if err != nil {
+				log.Printf("Error loading job state for %s: %v\n", jobID, err)
+				continue
+			}
+			d.Jobs[jobID] = job
+		}
+	}
+	return nil
+}
+
+func (d *Driver) splitAndStoreData(r *RDD, lines []string) {
+	chunkSize := len(lines) / r.NumPartitions
+
+	for i := 0; i < r.NumPartitions; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if i == r.NumPartitions-1 {
+			end = len(lines)
+		}
+
+		partitionData := lines[start:end]
+		partitionID := r.Partitions[i]
+
+		d.PartitionData[partitionID] = partitionData
+		r.Partitions[i] = partitionID
+	}
+}
+
+func (d *Driver) ReadRDDTextFile(filename string) *RDD {
+	dataBytes, _ := os.ReadFile(filename)
+	lines := strings.Split(string(dataBytes), "\n")
+	rdd := &RDD{
+		ID:              newID(),
+		Parent:          nil,
+		NumPartitions:   4,
+		Transformations: []types.Transformation{},
+	}
+
+	d.RegisterRDD(rdd)
+	d.splitAndStoreData(rdd, lines)
+
+	rdd.Driver = d
 	return rdd
 }
 

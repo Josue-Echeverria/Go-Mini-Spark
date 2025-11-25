@@ -9,7 +9,7 @@ func main() {
 	driver := ConnectDriver("localhost:9000") // Se conecta al Driver
 
 	// Crear un RDD
-	rddData := ReadRDDTextFile("data.txt", driver)
+	rddData := driver.ReadRDDTextFile("data.txt")
 
 	// Transformaciones LÓGICAS (no ejecutan nada)
 	rdd2 := rddData.Map()

@@ -10,6 +10,10 @@ type TransformationType int
 const (
     MapOp TransformationType = iota
     FilterOp
+	ReduceOp
+	FlatMapOp
+	ReduceByKeyOp
+	ShuffleOp
 )
 
 type Transformation struct {
@@ -21,8 +25,8 @@ type Transformation struct {
 type Task struct {
 	ID          int
 	PartitionID int
+	Data		interface{}
 	Transformations []Transformation
-	ExecuteFunc func(data interface{}) interface{}
 }
 
 type TaskReply struct {
