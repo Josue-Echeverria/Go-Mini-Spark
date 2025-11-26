@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.6.0 (2025-11-26)
+
+### Features
+
+- Jobs status saved in files
+  ([`4206666`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/4206666c3befa53e177a528f2be0a22fc4472ecd))
+
+
 ## v0.5.0 (2025-11-25)
 
 
