@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 var rddCounter uint64
+const WorkerTimeoutSeconds = 10
 
 type Driver struct {
 	Workers         map[int]types.WorkerInfo
@@ -126,7 +128,7 @@ func (r *RDD) Filter() *RDD {
 
 	newRDD.Transformations = append(newRDD.Transformations, types.Transformation{
 		Type:     types.FilterOp,
-		FuncName: "FilterLong",
+		FuncName: "IsLong",
 	})
 
 	r.Driver.RegisterRDD(newRDD)
@@ -143,7 +145,7 @@ func (r *RDD) Filter() *RDD {
 // // recibe el resultado parcial
 // Combina los resultados y los devuelve al usuario.
 
-func (r *RDD) Collect() []interface{} {
+func (r *RDD) Collect() []string {
 
 	// Construir el pipeline de transformaciones recorriendo el lineage
 	pipeline := []types.Transformation{}
@@ -153,8 +155,6 @@ func (r *RDD) Collect() []interface{} {
 		pipeline = append(curr.Transformations, pipeline...)
 		curr = curr.Parent
 	}
-
-	log.Printf("Complete pipeline of transformations: %v\n", pipeline)
 
 	// Crear tareas para cada partición
 	tasks := []types.Task{}
@@ -171,7 +171,7 @@ func (r *RDD) Collect() []interface{} {
 		tasks = append(tasks, task)
 	}
 
-	results := []interface{}{}
+	results := []string{}
 	for _, task := range tasks {
 		log.Printf("Sending task for partition %d to worker %d : %s\n", task.PartitionID, r.Driver.PartitionMap[task.PartitionID], r.Driver.Workers[r.Driver.PartitionMap[task.PartitionID]].Endpoint)
 
@@ -185,8 +185,7 @@ func (r *RDD) Collect() []interface{} {
 		}
 		client.Call("Worker.ExecuteTask", task, &reply)
 
-		log.Printf("Received result: %s\n", reply.Data)
-		results = append(results, reply.Data)
+		results = append(results, reply.Data...)
 	}
 
 	return results
@@ -359,8 +358,122 @@ func (d *Driver) ReadRDDTextFile(filename string) *RDD {
 	return rdd
 }
 
+// WorkerHeartbeat registra el heartbeat de un worker
+func (d *Driver) WorkerHeartbeat(heartbeat types.Heartbeat, reply *bool) error {
+    worker, exists := d.Workers[heartbeat.ID]
+    if !exists {
+        return fmt.Errorf("worker %d not found", heartbeat.ID)
+    }
+	
+    worker.LastSeen = time.Now()
+    d.Workers[heartbeat.ID] = worker
+	log.Printf("Received heartbeat from worker %d (Active tasks: %d)\n", heartbeat.ID, heartbeat.ActiveTasks)
+	*reply = true
+	return nil
+}
+
+// IsWorkerAlive verifica si un worker está vivo (heartbeat recibido en los últimos 30 segundos)
+func (d *Driver) IsWorkerAlive(workerID int) bool {
+    worker, exists := d.Workers[workerID]
+    if !exists || worker.Status == 500 {
+        return false
+    }
+
+    return time.Since(worker.LastSeen) < time.Duration(WorkerTimeoutSeconds)*time.Second
+}
+
+// GetAliveWorkers retorna la lista de workers activos
+func (d *Driver) GetAliveWorkers() []int {
+	var alive []int
+	for workerID := range d.Workers {
+		if d.IsWorkerAlive(workerID) {
+			alive = append(alive, workerID)
+		}
+	}
+	return alive
+}
+
+
+func (d *Driver) reassignPartitions(partitionIDs []int) {
+    aliveWorkers := d.GetAliveWorkers()
+
+    if len(aliveWorkers) == 0 {
+        log.Printf("ERROR: No alive workers available to reassign partitions\n")
+        return
+    }
+
+    for i, partitionID := range partitionIDs {
+        // Asignar a un worker vivo de forma round-robin
+        newWorkerID := aliveWorkers[i%len(aliveWorkers)]
+        oldWorkerID := d.PartitionMap[partitionID]
+
+        log.Printf("Reassigning partition %d from worker %d to worker %d\n", 
+            partitionID, oldWorkerID, newWorkerID)
+
+        d.PartitionMap[partitionID] = newWorkerID
+    }
+}
+
+func (d *Driver) handleWorkerFailure(workerID int) {
+    log.Printf("Handling failure of worker %d\n", workerID)
+
+    // Reasignar particiones de este worker a workers activos
+    partitionsToReassign := []int{}
+    for partitionID, assignedWorker := range d.PartitionMap {
+        if assignedWorker == workerID {
+            partitionsToReassign = append(partitionsToReassign, partitionID)
+        }
+    }
+
+    if len(partitionsToReassign) > 0 {
+        log.Printf("Reassigning %d partitions from failed worker %d\n", len(partitionsToReassign), workerID)
+        d.reassignPartitions(partitionsToReassign)
+    }
+
+	d.Workers[workerID] = types.WorkerInfo{
+		ID:       workerID,
+		Endpoint: d.Workers[workerID].Endpoint,
+		Status:   500, // marcar como inactivo
+	}
+}
+
+
+// checkWorkerHealth verifica la salud de todos los workers registrados
+func (d *Driver) checkWorkerHealth() {
+    for workerID, worker := range d.Workers {
+		if worker.Status == 500 {
+			continue // ya está marcado como inactivo
+		}
+        isAlive := d.IsWorkerAlive(workerID)
+
+        if !isAlive {
+            log.Printf("WARNING: Worker %d (%s) is NOT responding (no heartbeat in %d seconds)\n", 
+                workerID, worker.Endpoint, WorkerTimeoutSeconds)
+
+            // TODO:
+            // - Reasignar particiones a otros workers
+            // - Reintentar tareas que estaban en este worker
+            // - Alertar al usuario
+            d.handleWorkerFailure(workerID)
+        }
+    }
+}
+// StartWorkerMonitoring inicia un goroutine que monitorea a los workers periódicamente
+func (d *Driver) StartWorkerMonitoring() {
+    go func() {
+        ticker := time.NewTicker(WorkerTimeoutSeconds * time.Second) // Verificar cada 5 segundos
+        defer ticker.Stop()
+
+        for range ticker.C {
+            d.checkWorkerHealth()
+        }
+    }()
+}
+
 func (m *Driver) Start() {
 	log.Printf("Driver server starting on port %s\n", m.Port)
+
+	m.StartWorkerMonitoring()
 
 	rpc.Register(m)
 	listener, err := net.Listen("tcp", ":"+m.Port)

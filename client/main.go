@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	. "Go-Mini-Spark/pkg/driver"
+	"fmt"
 )
 
 func main() {
@@ -11,13 +11,17 @@ func main() {
 	// Crear un RDD
 	rddData := driver.ReadRDDTextFile("data.txt")
 
-	// Transformaciones LÓGICAS (no ejecutan nada)
 	rdd2 := rddData.Map()
 
-	rdd3 := rdd2.Filter()
+	// rdd3 := rdd2.Filter()
 
 	// Acción -> aquí sí se ejecuta en los workers
-	result := rdd3.Collect()
+	result := rdd2.Collect()
 
-	fmt.Println(result)
+	// Print results properly
+	fmt.Printf("Final result: %v\n", result)
+
+	for i, r := range result {
+		fmt.Printf("Partition %d: %v\n", i, r)
+	}
 }

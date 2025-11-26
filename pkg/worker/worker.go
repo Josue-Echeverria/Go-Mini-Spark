@@ -9,36 +9,45 @@ import (
 	"net"
 	"net/rpc"
 	"strings"
+	"time"
 )
 
+const heartBeatInterval = 5
+
 type Worker struct {
-	ID        int
-	Partition map[int][]string
-	TaskQueue []types.Task
-	Status    int
-	Endpoint  string
+	ID            int
+	Partition     map[int][]string
+	TaskQueue     []types.Task
+	Status        int
+	Endpoint      string
+	DriverAddress string
+	LastHeartbeat time.Time
+	ActiveTasks   int
 }
 
 var FuncRegistry = map[string]interface{}{
-    "ToUpper": func(s string) string { return strings.ToUpper(s) },
-    "IsLong":  func(s string) bool   { return len(s) > 10 },
-    "SplitWords": func(s string) []string {
-        return strings.Split(s, " ")
-    },
-    "Concat": func(a, b string) string {
-        return a + b
-    },
+	"ToUpper": func(s string) string { return strings.ToUpper(s) },
+	"IsLong":  func(s string) bool { return len(s) > 10 },
+	"SplitWords": func(s string) []string {
+		return strings.Split(s, " ")
+	},
+	"Concat": func(a, b string) string {
+		return a + b
+	},
 }
 
 func NewWorker(driverAddress, address string, maxTasks int) *Worker {
 	randomInt := rand.Intn(1000) // 0 <= n < 100
 
 	return &Worker{
-		ID:        randomInt,
-		Partition: make(map[int][]string),
-		TaskQueue: make([]types.Task, 0),
-		Status:    0,
-		Endpoint:  address,
+		ID:            randomInt,
+		Partition:     make(map[int][]string),
+		TaskQueue:     make([]types.Task, 0),
+		Status:        0,
+		Endpoint:      address,
+		DriverAddress: driverAddress,
+		LastHeartbeat: time.Now(),
+		ActiveTasks:   0,
 	}
 }
 
@@ -50,24 +59,24 @@ func ExecuteTransformation(w *Worker, t types.Transformation, data []string) ([]
 	}
 
 	switch t.Type {
-		case types.MapOp:
-			fn := FuncRegistry[t.FuncName].(func(string) string)
-			data = utils.Map(data, fn)
+	case types.MapOp:
+		fn := FuncRegistry[t.FuncName].(func(string) string)
+		data = utils.Map(data, fn)
 
-		case types.FilterOp:
-			fn := FuncRegistry[t.FuncName].(func(string) bool)
-			data = utils.Filter(data, fn)
+	case types.FilterOp:
+		fn := FuncRegistry[t.FuncName].(func(string) bool)
+		data = utils.Filter(data, fn)
 
-		case types.FlatMapOp:
-			fn := FuncRegistry[t.FuncName].(func(string) []string)
-			data = utils.FlatMap(data, fn)
+	case types.FlatMapOp:
+		fn := FuncRegistry[t.FuncName].(func(string) []string)
+		data = utils.FlatMap(data, fn)
 
-	// case types.ReduceOp: TODO
-	//     fn := FuncRegistry[t.FuncName].(func(string, string) string)
-	//     result := utils.Reduce(data, fn)
-	//     data = []string{result}
-		default:
-			return nil, fmt.Errorf("unsupported transformation type %d", t.Type)
+		// case types.ReduceOp: TODO
+		//     fn := FuncRegistry[t.FuncName].(func(string, string) string)
+		//     result := utils.Reduce(data, fn)
+		//     data = []string{result}
+	default:
+		return nil, fmt.Errorf("unsupported transformation type %d", t.Type)
 	}
 
 	return data, nil
@@ -76,6 +85,10 @@ func ExecuteTransformation(w *Worker, t types.Transformation, data []string) ([]
 // ExecuteTask RPC method - must be exported
 func (w *Worker) ExecuteTask(task types.Task, reply *types.TaskReply) error {
 	log.Printf("Worker %d executing task %d\n", w.ID, len(task.Transformations))
+	w.ActiveTasks++
+	defer func() {
+		w.ActiveTasks--
+	}()
 
 	data, ok := task.Data.([]string)
 	if !ok {
@@ -122,6 +135,50 @@ func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 func SendResultToDriver(result string) {
 }
 
+// SendHeartbeat envía un heartbeat al driver
+func (w *Worker) SendHeartbeat(driverAddress string) error {
+	client, err := rpc.Dial("tcp", driverAddress)
+	if err != nil {
+		return fmt.Errorf("error connecting to driver: %v", err)
+	}
+	defer client.Close()
+
+	w.LastHeartbeat = time.Now()
+	w.Status = 1 // 1 = alive
+
+	// Crear un objeto con información serializable
+	heartbeat := types.Heartbeat{
+		ID:            w.ID,
+		Status:        w.Status,
+		ActiveTasks:   w.ActiveTasks,
+		Endpoint:      w.Endpoint,
+		LastHeartbeat: w.LastHeartbeat,
+	}
+
+	var reply bool
+	err = client.Call("Driver.WorkerHeartbeat", heartbeat, &reply)
+	if err != nil {
+		return fmt.Errorf("error sending heartbeat: %v", err)
+	}
+
+	log.Printf("Worker %d sent heartbeat to driver\n", w.ID)
+	return nil
+}
+
+// StartHeartbeatLoop inicia un goroutine que envía heartbeats periódicamente
+func (w *Worker) StartHeartbeatLoop(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := w.SendHeartbeat(w.DriverAddress); err != nil {
+				log.Printf("Worker %d: %v\n", w.ID, err)
+			}
+		}
+	}()
+}
+
 func (w *Worker) Start(driverAddress string) {
 	log.Printf("Worker %d starting and connecting to driver at %s\n", w.ID, driverAddress)
 
@@ -143,6 +200,8 @@ func (w *Worker) Start(driverAddress string) {
 	}
 
 	client.Close()
+
+	w.StartHeartbeatLoop(heartBeatInterval * time.Second)
 
 	// Register RPC methods
 	rpc.Register(w)
