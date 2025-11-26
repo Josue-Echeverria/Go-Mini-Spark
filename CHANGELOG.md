@@ -1,7 +1,21 @@
 # CHANGELOG
 
 
+## v0.5.0 (2025-11-25)
+
+
 ## v0.4.0 (2025-11-24)
+
+### Features
+
+- Refactors driver and adds RDD text file reading
+  ([`02621b5`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/02621b59d0b2a6947bd5594915c6591782f0c8e3))
+
+Moves driver functionality into a dedicated package.
+
+Adds functionality for reading text files into RDDs, enabling data loading and processing.
+
+Improves code organization and introduces core RDD operations.
 
 
 ## v0.3.0 (2025-11-22)
