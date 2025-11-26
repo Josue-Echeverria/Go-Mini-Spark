@@ -3,9 +3,10 @@ package types
 import "time"
 
 type Job struct {
-	ID         string
-	Partitions []string
-	Status     int
+    ID     int
+    RDD    int // RDD ID 
+    Tasks  []Task
+    Status string
 }
 
 type TransformationType int

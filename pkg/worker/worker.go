@@ -144,9 +144,7 @@ func (w *Worker) SendHeartbeat(driverAddress string) error {
 	defer client.Close()
 
 	w.LastHeartbeat = time.Now()
-	w.Status = 1 // 1 = alive
-
-	// Crear un objeto con información serializable
+	
 	heartbeat := types.Heartbeat{
 		ID:            w.ID,
 		Status:        w.Status,

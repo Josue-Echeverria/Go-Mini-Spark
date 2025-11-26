@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"os"
@@ -15,11 +16,12 @@ import (
 )
 
 var rddCounter uint64
+
 const WorkerTimeoutSeconds = 10
 
 type Driver struct {
 	Workers         map[int]types.WorkerInfo
-	Jobs            map[string]*types.Job
+	Jobs            map[int]*types.Job
 	Tasks           map[string]*types.Task
 	PartitionMap    map[int]int
 	PartitionData   map[int][]string
@@ -58,42 +60,6 @@ func keys(m map[int]types.WorkerInfo) []int {
 		result = append(result, k)
 	}
 	return result
-}
-
-func ConnectDriver(masterAddress string) *Driver {
-	client, err := rpc.Dial("tcp", masterAddress)
-	if err != nil {
-		log.Fatal("Error connecting to master:", err)
-	}
-
-	var driverInfo DriverInfo
-	err = client.Call("Driver.GetDriver", struct{}{}, &driverInfo)
-	if err != nil {
-		log.Fatal("Error registering with driver:", err)
-	}
-
-	driver := &Driver{
-		Workers:       driverInfo.Workers,
-		Jobs:          make(map[string]*types.Job),
-		Tasks:         make(map[string]*types.Task),
-		PartitionData: make(map[int][]string),
-		PartitionMap:  driverInfo.PartitionMap,
-		RDDRegistry:   make(map[int]*RDD),
-		Client:        client,
-		DriverAddress: masterAddress,
-		Port:          driverInfo.Port,
-	}
-
-	return driver
-}
-
-func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
-	*reply = DriverInfo{
-		Workers:      d.Workers,
-		PartitionMap: d.PartitionMap,
-		Port:         d.Port,
-	}
-	return nil
 }
 
 func (r *RDD) Map() *RDD {
@@ -136,6 +102,56 @@ func (r *RDD) Filter() *RDD {
 	return newRDD
 }
 
+func NewDriver(port string) *Driver {
+	return &Driver{
+		Workers:       make(map[int]types.WorkerInfo),
+		Jobs:          make(map[int]*types.Job),
+		Tasks:         make(map[string]*types.Task),
+		PartitionData: make(map[int][]string),
+		PartitionMap:  make(map[int]int),
+		Port:          port,
+		StateDir:      "driver_state",
+	}
+}
+
+func ConnectDriver(masterAddress string) *Driver {
+	client, err := rpc.Dial("tcp", masterAddress)
+	if err != nil {
+		log.Fatal("Error connecting to master:", err)
+	}
+
+	var driverInfo DriverInfo
+	err = client.Call("Driver.GetDriver", struct{}{}, &driverInfo)
+	if err != nil {
+		log.Fatal("Error registering with driver:", err)
+	}
+
+	driver := &Driver{
+		Workers:       driverInfo.Workers,
+		Jobs:          make(map[int]*types.Job),
+		Tasks:         make(map[string]*types.Task),
+		PartitionData: make(map[int][]string),
+		PartitionMap:  driverInfo.PartitionMap,
+		RDDRegistry:   make(map[int]*RDD),
+		Client:        client,
+		DriverAddress: masterAddress,
+		StateDir: "driver_state",
+		Port:          driverInfo.Port,
+	}
+
+	return driver
+}
+
+func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
+	*reply = DriverInfo{
+		Workers:      d.Workers,
+		PartitionMap: d.PartitionMap,
+		Port:         d.Port,
+	}
+	return nil
+}
+
+
 // Recorre el lineage hacia atrás para obtener todas las transformaciones.
 // Invierte las transformaciones para obtener el pipeline correcto.
 // Genera una Task por cada partición del RDD.
@@ -149,6 +165,7 @@ func (r *RDD) Collect() []string {
 
 	// Construir el pipeline de transformaciones recorriendo el lineage
 	pipeline := []types.Transformation{}
+
 	curr := r
 	for curr != nil {
 		// Prepender las transformaciones de este RDD al inicio del pipeline
@@ -171,6 +188,16 @@ func (r *RDD) Collect() []string {
 		tasks = append(tasks, task)
 	}
 
+	randomInt := rand.Intn(1000) // 0 <= n < 100
+	job := types.Job{
+		ID:     randomInt,
+		RDD:    r.ID,
+		Tasks:  tasks,
+		Status: "running",
+	}
+	r.Driver.Jobs[job.ID] = &job
+	r.Driver.SaveJobState(job.ID)
+
 	results := []string{}
 	for _, task := range tasks {
 		log.Printf("Sending task for partition %d to worker %d : %s\n", task.PartitionID, r.Driver.PartitionMap[task.PartitionID], r.Driver.Workers[r.Driver.PartitionMap[task.PartitionID]].Endpoint)
@@ -188,19 +215,10 @@ func (r *RDD) Collect() []string {
 		results = append(results, reply.Data...)
 	}
 
-	return results
-}
+	r.Driver.Jobs[job.ID].Status = "completed"
+	r.Driver.SaveJobState(job.ID)
 
-func NewDriver(port string) *Driver {
-	return &Driver{
-		Workers:       make(map[int]types.WorkerInfo),
-		Jobs:          make(map[string]*types.Job),
-		Tasks:         make(map[string]*types.Task),
-		PartitionData: make(map[int][]string),
-		PartitionMap:  make(map[int]int),
-		Port:          port,
-		StateDir:      "driver_state",
-	}
+	return results
 }
 
 func (d *Driver) RegisterWorker(info types.WorkerInfo, reply *bool) error {
@@ -248,7 +266,7 @@ func (d *Driver) RegisterRDD(r *RDD) *RDD {
 }
 
 // SaveJobState persiste el estado de un job a un archivo JSON
-func (d *Driver) SaveJobState(jobID string) error {
+func (d *Driver) SaveJobState(jobID int) error {
 	// Crear directorio si no existe
 	if err := os.MkdirAll(d.StateDir, 0755); err != nil {
 		return err
@@ -256,7 +274,7 @@ func (d *Driver) SaveJobState(jobID string) error {
 
 	job, exists := d.Jobs[jobID]
 	if !exists {
-		return fmt.Errorf("job %s not found", jobID)
+		return fmt.Errorf("job %d not found", jobID)
 	}
 
 	// Serializar job a JSON
@@ -266,13 +284,13 @@ func (d *Driver) SaveJobState(jobID string) error {
 	}
 
 	// Guardar en archivo
-	filePath := filepath.Join(d.StateDir, jobID+".json")
+	filePath := filepath.Join(d.StateDir, fmt.Sprintf("job_%d.json", jobID))
 	return os.WriteFile(filePath, data, 0644)
 }
 
 // LoadJobState carga el estado de un job desde un archivo JSON
-func (d *Driver) LoadJobState(jobID string) (*types.Job, error) {
-	filePath := filepath.Join(d.StateDir, jobID+".json")
+func (d *Driver) LoadJobState(jobID int) (*types.Job, error) {
+	filePath := filepath.Join(d.StateDir, fmt.Sprintf("job_%d.json", jobID))
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -311,10 +329,17 @@ func (d *Driver) LoadAllJobStates() error {
 
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			jobID := strings.TrimSuffix(entry.Name(), ".json")
+			jobIDStr := strings.TrimSuffix(entry.Name(), ".json")
+			jobIDStr = strings.TrimPrefix(jobIDStr, "job_")
+			jobID := 0
+			_, err := fmt.Sscanf(jobIDStr, "%d", &jobID)
+			if err != nil {
+				log.Printf("Error parsing job ID from %s: %v\n", jobIDStr, err)
+				continue
+			}
 			job, err := d.LoadJobState(jobID)
 			if err != nil {
-				log.Printf("Error loading job state for %s: %v\n", jobID, err)
+				log.Printf("Error loading job state for %d: %v\n", jobID, err)
 				continue
 			}
 			d.Jobs[jobID] = job
@@ -360,13 +385,13 @@ func (d *Driver) ReadRDDTextFile(filename string) *RDD {
 
 // WorkerHeartbeat registra el heartbeat de un worker
 func (d *Driver) WorkerHeartbeat(heartbeat types.Heartbeat, reply *bool) error {
-    worker, exists := d.Workers[heartbeat.ID]
-    if !exists {
-        return fmt.Errorf("worker %d not found", heartbeat.ID)
-    }
-	
-    worker.LastSeen = time.Now()
-    d.Workers[heartbeat.ID] = worker
+	worker, exists := d.Workers[heartbeat.ID]
+	if !exists {
+		return fmt.Errorf("worker %d not found", heartbeat.ID)
+	}
+
+	worker.LastSeen = time.Now()
+	d.Workers[heartbeat.ID] = worker
 	log.Printf("Received heartbeat from worker %d (Active tasks: %d)\n", heartbeat.ID, heartbeat.ActiveTasks)
 	*reply = true
 	return nil
@@ -374,12 +399,12 @@ func (d *Driver) WorkerHeartbeat(heartbeat types.Heartbeat, reply *bool) error {
 
 // IsWorkerAlive verifica si un worker está vivo (heartbeat recibido en los últimos 30 segundos)
 func (d *Driver) IsWorkerAlive(workerID int) bool {
-    worker, exists := d.Workers[workerID]
-    if !exists || worker.Status == 500 {
-        return false
-    }
+	worker, exists := d.Workers[workerID]
+	if !exists || worker.Status == 500 {
+		return false
+	}
 
-    return time.Since(worker.LastSeen) < time.Duration(WorkerTimeoutSeconds)*time.Second
+	return time.Since(worker.LastSeen) < time.Duration(WorkerTimeoutSeconds)*time.Second
 }
 
 // GetAliveWorkers retorna la lista de workers activos
@@ -393,42 +418,41 @@ func (d *Driver) GetAliveWorkers() []int {
 	return alive
 }
 
-
 func (d *Driver) reassignPartitions(partitionIDs []int) {
-    aliveWorkers := d.GetAliveWorkers()
+	aliveWorkers := d.GetAliveWorkers()
 
-    if len(aliveWorkers) == 0 {
-        log.Printf("ERROR: No alive workers available to reassign partitions\n")
-        return
-    }
+	if len(aliveWorkers) == 0 {
+		log.Printf("ERROR: No alive workers available to reassign partitions\n")
+		return
+	}
 
-    for i, partitionID := range partitionIDs {
-        // Asignar a un worker vivo de forma round-robin
-        newWorkerID := aliveWorkers[i%len(aliveWorkers)]
-        oldWorkerID := d.PartitionMap[partitionID]
+	for i, partitionID := range partitionIDs {
+		// Asignar a un worker vivo de forma round-robin
+		newWorkerID := aliveWorkers[i%len(aliveWorkers)]
+		oldWorkerID := d.PartitionMap[partitionID]
 
-        log.Printf("Reassigning partition %d from worker %d to worker %d\n", 
-            partitionID, oldWorkerID, newWorkerID)
+		log.Printf("Reassigning partition %d from worker %d to worker %d\n",
+			partitionID, oldWorkerID, newWorkerID)
 
-        d.PartitionMap[partitionID] = newWorkerID
-    }
+		d.PartitionMap[partitionID] = newWorkerID
+	}
 }
 
 func (d *Driver) handleWorkerFailure(workerID int) {
-    log.Printf("Handling failure of worker %d\n", workerID)
+	log.Printf("Handling failure of worker %d\n", workerID)
 
-    // Reasignar particiones de este worker a workers activos
-    partitionsToReassign := []int{}
-    for partitionID, assignedWorker := range d.PartitionMap {
-        if assignedWorker == workerID {
-            partitionsToReassign = append(partitionsToReassign, partitionID)
-        }
-    }
+	// Reasignar particiones de este worker a workers activos
+	partitionsToReassign := []int{}
+	for partitionID, assignedWorker := range d.PartitionMap {
+		if assignedWorker == workerID {
+			partitionsToReassign = append(partitionsToReassign, partitionID)
+		}
+	}
 
-    if len(partitionsToReassign) > 0 {
-        log.Printf("Reassigning %d partitions from failed worker %d\n", len(partitionsToReassign), workerID)
-        d.reassignPartitions(partitionsToReassign)
-    }
+	if len(partitionsToReassign) > 0 {
+		log.Printf("Reassigning %d partitions from failed worker %d\n", len(partitionsToReassign), workerID)
+		d.reassignPartitions(partitionsToReassign)
+	}
 
 	d.Workers[workerID] = types.WorkerInfo{
 		ID:       workerID,
@@ -437,37 +461,37 @@ func (d *Driver) handleWorkerFailure(workerID int) {
 	}
 }
 
-
 // checkWorkerHealth verifica la salud de todos los workers registrados
 func (d *Driver) checkWorkerHealth() {
-    for workerID, worker := range d.Workers {
+	for workerID, worker := range d.Workers {
 		if worker.Status == 500 {
 			continue // ya está marcado como inactivo
 		}
-        isAlive := d.IsWorkerAlive(workerID)
+		isAlive := d.IsWorkerAlive(workerID)
 
-        if !isAlive {
-            log.Printf("WARNING: Worker %d (%s) is NOT responding (no heartbeat in %d seconds)\n", 
-                workerID, worker.Endpoint, WorkerTimeoutSeconds)
+		if !isAlive {
+			log.Printf("WARNING: Worker %d (%s) is NOT responding (no heartbeat in %d seconds)\n",
+				workerID, worker.Endpoint, WorkerTimeoutSeconds)
 
-            // TODO:
-            // - Reasignar particiones a otros workers
-            // - Reintentar tareas que estaban en este worker
-            // - Alertar al usuario
-            d.handleWorkerFailure(workerID)
-        }
-    }
+			// TODO:
+			// - Reasignar particiones a otros workers
+			// - Reintentar tareas que estaban en este worker
+			// - Alertar al usuario
+			d.handleWorkerFailure(workerID)
+		}
+	}
 }
+
 // StartWorkerMonitoring inicia un goroutine que monitorea a los workers periódicamente
 func (d *Driver) StartWorkerMonitoring() {
-    go func() {
-        ticker := time.NewTicker(WorkerTimeoutSeconds * time.Second) // Verificar cada 5 segundos
-        defer ticker.Stop()
+	go func() {
+		ticker := time.NewTicker(WorkerTimeoutSeconds * time.Second) // Verificar cada 5 segundos
+		defer ticker.Stop()
 
-        for range ticker.C {
-            d.checkWorkerHealth()
-        }
-    }()
+		for range ticker.C {
+			d.checkWorkerHealth()
+		}
+	}()
 }
 
 func (m *Driver) Start() {
