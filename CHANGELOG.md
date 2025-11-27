@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.7.0 (2025-11-27)
+
+### Features
+
+- Refactor driver by separating funcs in different files
+  ([`5b9fe06`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/5b9fe06c432b31b9517c02896e49a945de6419c2))
+
+
 ## v0.6.0 (2025-11-26)
 
 ### Features
