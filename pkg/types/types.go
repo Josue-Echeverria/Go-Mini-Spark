@@ -9,6 +9,11 @@ type Job struct {
     Status string
 }
 
+type JobState struct {
+    JobID int
+    State string
+}
+
 type TransformationType int
 
 const (
