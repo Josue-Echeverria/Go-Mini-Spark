@@ -34,14 +34,14 @@ type Transformation struct {
 type Task struct {
 	ID              int
 	PartitionID     int
-	Data            interface{}
+    Data            []Row 
 	Transformations []Transformation
 }
 
 type TaskReply struct {
 	ID     string
 	status int
-	Data   []string
+	Data   []Row
 }
 
 type Partition struct {
@@ -64,4 +64,9 @@ type Heartbeat struct {
 	ActiveTasks   int
 	Endpoint      string
 	LastHeartbeat time.Time
+}
+
+type Row struct {
+    Key   interface{}
+    Value interface{}
 }

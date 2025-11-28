@@ -10,11 +10,12 @@ import (
 	"log"
 	"os"
 	"sort"
+	"Go-Mini-Spark/pkg/types"
 )
 
 // Map applies a function to each element in a slice and returns a new slice
-func Map(data []string, fn func(string) string) []string {
-	result := make([]string, len(data))
+func Map(data []types.Row, fn func(types.Row) types.Row) []types.Row {
+	result := make([]types.Row, len(data))
 	for i, item := range data {
 		result[i] = fn(item)
 	}
@@ -22,10 +23,10 @@ func Map(data []string, fn func(string) string) []string {
 }
 
 // Filter returns a new slice containing only elements that satisfy the predicate
-func Filter(data []string, predicate func(string) bool) []string {
-	var result []string
+func Filter(data []types.Row, predicate func(types.Row) bool) []types.Row {
+	var result []types.Row
 	for _, item := range data {
-		if predicate(item) {
+		if predicate(item.Value.(types.Row)) {
 			result = append(result, item)
 		}
 	}
@@ -33,13 +34,15 @@ func Filter(data []string, predicate func(string) bool) []string {
 }
 
 // FlatMap applies a function that returns a slice to each element and flattens the result
-func FlatMap(data []string, fn func(string) []string) []string {
-	var result []string
-	for _, item := range data {
-		mapped := fn(item)
-		result = append(result, mapped...)
-	}
-	return result
+func FlatMap(rows []types.Row, fn func(types.Row) []types.Row) []types.Row {
+    result := []types.Row{}
+
+    for _, row := range rows {
+        out := fn(row)
+        result = append(result, out...)
+    }
+
+    return result
 }
 
 // Join performs an inner join on two collections by key

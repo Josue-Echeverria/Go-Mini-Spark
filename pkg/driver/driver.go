@@ -14,14 +14,13 @@ import (
 var rddCounter uint64
 
 const WorkerTimeoutSeconds = 10
-const maxMem = 10 * 1024 * 1024 // 10 MB
+const maxMem = 70 * 1024 * 1024 // 70 MB
 
 type Driver struct {
 	Workers         map[int]types.WorkerInfo
 	Jobs            map[int]*types.Job
 	Tasks           map[string]*types.Task
 	PartitionMap    map[int]int
-	PartitionData   map[int][]string
 	RDDRegistry     map[int]*RDD
 	DriverAddress   string
 	Client          *rpc.Client
@@ -58,7 +57,6 @@ func NewDriver(port string) *Driver {
 		Jobs:          make(map[int]*types.Job),
 		RDDRegistry:   make(map[int]*RDD),
 		Tasks:         make(map[string]*types.Task),
-		PartitionData: make(map[int][]string),
 		PartitionMap:  make(map[int]int),
 		Port:          port,
 		StateDir:      "driver_state",
@@ -137,10 +135,6 @@ func (d *Driver) allocatePartitions(r *RDD) {
 }
 
 func (d *Driver) RegisterRDD(r *RDD) {
-
-	log.Printf("Registering RDD %d with %d partitions\n", r.ID, r.NumPartitions)
-	log.Printf("RDD %d has %d transformations\n", r.ID, len(r.Transformations))
-
 	d.RDDRegistry[r.ID] = r
 
 	// If root RDD, allocate partitions
@@ -150,22 +144,31 @@ func (d *Driver) RegisterRDD(r *RDD) {
 }
 
 func (d *Driver) splitAndStoreData(r *RDD, lines []string) {
-	chunkSize := len(lines) / r.NumPartitions
+    if r.NumPartitions == 0 {
+        panic("RDD.NumPartitions not set")
+    }
 
-	for i := 0; i < r.NumPartitions; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if i == r.NumPartitions-1 {
-			end = len(lines)
-		}
 
-		partitionData := lines[start:end]
-		partitionID := r.Partitions[i]
+    rows := make([]types.Row, len(lines))
+    for i, line := range lines {
+        rows[i] = types.Row{Key: nil, Value: line}
+    }
 
-		d.PartitionData[partitionID] = partitionData
-		r.Partitions[i] = partitionID
-        d.Cache.Put(partitionID, partitionData)
-	}
+    chunkSize := len(rows) / r.NumPartitions
+
+    for i := 0; i < r.NumPartitions; i++ {
+        start := i * chunkSize
+        end := start + chunkSize
+
+        if i == r.NumPartitions-1 {
+            end = len(rows)
+        }
+
+        dataChunk := rows[start:end]
+        partitionID := r.Partitions[i]
+
+        d.Cache.Put(partitionID, dataChunk)
+    }
 }
 
 func (d *Driver) ReadRDDTextFile(filename string, reply *int) error {

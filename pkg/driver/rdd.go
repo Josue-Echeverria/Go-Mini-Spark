@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"net/rpc"
+	"sync"
 )
 
 type RDD struct {
@@ -101,72 +102,79 @@ func (r *RDD) Filter() *RDD {
 	return newRDD
 }
 
+func (d *Driver) Collect(id int, reply *[]types.Row) error {
+    r := d.RDDRegistry[id]
 
-func (d *Driver) Collect(id int, reply *[]string) error {
+    // construir pipeline
+    pipeline := []types.Transformation{}
+    curr := r
+    for curr != nil {
+        pipeline = append(curr.Transformations, pipeline...)
+        curr = curr.Parent
+    }
 
-	log.Printf("%v", d.RDDRegistry)
-	log.Printf("%d", id)
-	r := d.RDDRegistry[id]
+    // crear tasks
+    tasks := []types.Task{}
+    for i, partitionID := range r.Partitions {
+        tasks = append(tasks, types.Task{
+            ID:              i,
+            PartitionID:     partitionID,
+            Data:            d.Cache.Get(partitionID),
+            Transformations: pipeline,
+        })
+    }
 
-	// Construir el pipeline de transformaciones recorriendo el lineage
-	pipeline := []types.Transformation{}
+    // logging del Job
+    jobID := rand.Intn(1000)
+    job := types.Job{
+        ID:     jobID,
+        RDD:    r.ID,
+        Tasks:  tasks,
+        Status: "running",
+    }
+    d.RegisterJob(job)
+    d.SaveJobState(job.ID, "running")
 
-	curr := r
-	for curr != nil {
-		// Prepender las transformaciones de este RDD al inicio del pipeline
-		pipeline = append(curr.Transformations, pipeline...)
-		curr = curr.Parent
+    // ejecutar tareas en paralelo
+	results := make([][]types.Row, len(tasks))
+    var wg sync.WaitGroup
+    wg.Add(len(tasks))
+
+    for i, task := range tasks {
+        go func(i int, task types.Task) {
+            defer wg.Done()
+
+            workerID := d.PartitionMap[task.PartitionID]
+            endpoint := d.Workers[workerID].Endpoint
+
+            var rep types.TaskReply
+            client, err := rpc.Dial("tcp", endpoint)
+            if err != nil {
+                log.Printf("Worker %d unreachable: %v\n", workerID, err)
+                return
+            }
+            defer client.Close()
+
+            err = client.Call("Worker.ExecuteTask", task, &rep)
+            if err != nil {
+                log.Printf("Task %d failed: %v\n", task.ID, err)
+                return
+            }
+
+            results[i] = rep.Data
+        }(i, task)
+    }
+
+    wg.Wait()
+
+    // aplanar resultados
+	flat := []types.Row{}
+	for _, chunk := range results {
+		flat = append(flat, chunk...)
 	}
+	*reply = flat
 
-	// Crear tareas para cada partición
-	tasks := []types.Task{}
-	i := 0
-
-	// log.Printf("Creating tasks for RDD %d with %d partitions\n", r.ID, len(r.Partitions))
-
-
-	for _, partitionID := range r.Partitions {
-		task := types.Task{
-			ID:              i,
-			PartitionID:     partitionID,
-			Data:            r.Driver.PartitionData[partitionID],
-			Transformations: pipeline,
-		}
-		i++
-		// log.Printf("data: %v", r.Driver.PartitionData[partitionID])
-		tasks = append(tasks, task)
-	}
-
-	randomInt := rand.Intn(1000) // 0 <= n < 100
-	job := types.Job{
-		ID:     randomInt,
-		RDD:    r.ID,
-		Tasks:  tasks,
-		Status: "running",
-	}
-
-	d.RegisterJob(job)
-	d.SaveJobState(job.ID, "running")
-	 
-	log .Printf("Starting job %d with %d tasks\n", job.ID, len(tasks))
-	results := []string{}
-	for _, task := range tasks {
-		workerID := d.PartitionMap[task.PartitionID]
-		workerEndpoint := d.Workers[workerID].Endpoint
-
-		log.Printf("Sending task for partition %d to worker %d : %s\n", task.PartitionID, workerID, workerEndpoint)
-
-		var reply types.TaskReply
-		client, err := rpc.Dial("tcp", workerEndpoint)
-		if err != nil {
-			log.Fatal("Error connecting to worker:", err)
-		}
-		client.Call("Worker.ExecuteTask", task, &reply)
-
-		results = append(results, reply.Data...)
-	}
-
-	d.SaveJobState(job.ID, "running")
-	*reply = results
-	return nil
+    d.SaveJobState(job.ID, "completed")
+    *reply = flat
+    return nil
 }

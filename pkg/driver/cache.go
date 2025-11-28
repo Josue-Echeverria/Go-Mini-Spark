@@ -1,215 +1,278 @@
 package driver
 
 import (
-    "bytes"
-    "encoding/gob"
-    "fmt"
-    "os"
-    "path/filepath"
-    "sort"
-    "sync"
-    "sync/atomic"
-    "time"
+	"bytes"
+	"encoding/gob"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+    "Go-Mini-Spark/pkg/types"
 )
 
+// PartitionEntry represents a single partition that can exist in memory or on disk.
+// It tracks the partition's location, size, and provides thread-safe access.
 type PartitionEntry struct {
-    PartitionID int
-    inMem       []string
-    onDiskPath  string
-    sizeBytes   int64
-    mu          sync.RWMutex
+	PartitionID int
+	inMem       []types.Row
+	onDiskPath  string
+	sizeBytes   int64
+	mu          sync.RWMutex
 }
 
+// PartitionCache manages a collection of partitions with automatic memory management.
+// When memory usage exceeds MaxMemory, it automatically spills partitions to disk.
+// Thread-safe for concurrent read/write operations.
 type PartitionCache struct {
-    mu        sync.RWMutex
-    entries   map[int]*PartitionEntry
-    memBytes  int64       // tracked atomically
-    MaxMemory int64
-    dir       string
+	mu        sync.RWMutex
+	entries   map[int]*PartitionEntry
+	memBytes  int64 // tracked atomically
+	MaxMemory int64
+	dir       string
 }
 
-// new cache
+// NewPartitionCache creates a new partition cache with the specified directory and memory limit.
+// The directory will be created if it doesn't exist.
+// Returns an error if directory creation fails.
 func NewPartitionCache(dir string, maxMem int64) (*PartitionCache, error) {
-    if err := os.MkdirAll(dir, 0755); err != nil {
-        return nil, err
-    }
-    return &PartitionCache{
-        entries:   make(map[int]*PartitionEntry),
-        MaxMemory: maxMem,
-        dir:       dir,
-    }, nil
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create cache directory %s: %w", dir, err)
+	}
+	return &PartitionCache{
+		entries:   make(map[int]*PartitionEntry),
+		MaxMemory: maxMem,
+		dir:       dir,
+	}, nil
 }
 
-func estimateSize(data []string) int64 {
-    var s int64
-    for _, str := range data {
-        s += int64(len(str))
-        s += 16
-    }
-    return s
+// estimateSize calculates the approximate memory footprint of string slice data.
+// Includes string content length plus estimated overhead (16 bytes per string for slice header/pointer).
+func estimateSize(data []types.Row) int64 {
+	var totalSize int64
+	for _, row := range data {
+		// Estimate size of Key and Value assuming they are strings for simplicity
+		if keyStr, ok := row.Key.(string); ok {
+			totalSize += int64(len(keyStr))
+			totalSize += 16
+		}
+		if valueStr, ok := row.Value.(string); ok {
+			totalSize += int64(len(valueStr))
+			totalSize += 16
+		}
+	}
+	return totalSize
 }
 
-// Put: guarda datos en memoria y hace spill si excede umbral
-func (c *PartitionCache) Put(partitionID int, data []string) error {
-    size := estimateSize(data)
+// Put stores partition data in memory and triggers spilling if memory threshold is exceeded.
+// If the partition already exists, its data is replaced and memory accounting is updated.
+// Spilling is triggered asynchronously to avoid blocking the caller.
+func (c *PartitionCache) Put(partitionID int, data []types.Row) {
+	size := estimateSize(data)
 
-    c.mu.Lock()
-    e, ok := c.entries[partitionID]
-    if !ok {
-        e = &PartitionEntry{PartitionID: partitionID}
-        c.entries[partitionID] = e
-    }
-    c.mu.Unlock()
+	// Find or create partition entry under cache lock
+	c.mu.Lock()
+	entry, exists := c.entries[partitionID]
+	if !exists {
+		entry = &PartitionEntry{PartitionID: partitionID}
+		c.entries[partitionID] = entry
+	}
+	c.mu.Unlock()
 
-    e.mu.Lock()
-    // reemplaza inMem
-    prev := e.sizeBytes
-    e.inMem = data
-    e.sizeBytes = size
-    e.mu.Unlock()
+	// Update entry data under entry lock
+	entry.mu.Lock()
+	prevSize := entry.sizeBytes
+	entry.inMem = data
+	entry.sizeBytes = size
+	entry.onDiskPath = "" // Clear disk path since data is now in memory
+	entry.mu.Unlock()
 
-    // actualizar contador total
-    atomic.AddInt64(&c.memBytes, size-prev)
+	// Update total memory usage atomically
+	atomic.AddInt64(&c.memBytes, size-prevSize)
 
-    // si excede umbral, spill
-    if atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
-        go c.spillIfNeeded() // opcional: asíncrono
-    }
-    return nil
+	// Trigger asynchronous spilling if memory threshold exceeded
+	if atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
+		go c.spillIfNeeded()
+	}
 }
 
-// Get: devuelve datos (carga desde disco si necesario)
-func (c *PartitionCache) Get(partitionID int) ([]string, error) {
-    c.mu.RLock()
-    e, ok := c.entries[partitionID]
-    c.mu.RUnlock()
-    if !ok {
-        return nil, fmt.Errorf("partition %d not found", partitionID)
-    }
+// Get retrieves partition data, loading from disk if necessary.
+// Returns a copy of the data to prevent external modification.
+// If data is on disk, it's loaded into memory and may trigger spilling of other partitions.
+func (c *PartitionCache) Get(partitionID int) []types.Row {
+	// Find the partition entry
+	c.mu.RLock()
+	entry, exists := c.entries[partitionID]
+	c.mu.RUnlock()
 
-    e.mu.RLock()
-    if e.inMem != nil {
-        data := make([]string, len(e.inMem))
-        copy(data, e.inMem)
-        e.mu.RUnlock()
-        return data, nil
-    }
-    onDisk := e.onDiskPath
-    e.mu.RUnlock()
+	if !exists {
+		log.Printf("Partition %d not found in cache", partitionID)
+		return nil
+	}
 
-    if onDisk == "" {
-        return nil, fmt.Errorf("no data for partition %d", partitionID)
-    }
+	// Check if data is already in memory
+	entry.mu.RLock()
+	if entry.inMem != nil {
+		// Return a copy to prevent external modification
+		dataCopy := make([]types.Row, len(entry.inMem))
+		copy(dataCopy, entry.inMem)
+		entry.mu.RUnlock()
+		return dataCopy
+	}
 
-    // cargar desde disco (synch)
-    data, err := c.loadFromDisk(onDisk)
-    if err != nil {
-        return nil, err
-    }
+	// Data is on disk - get the path for loading
+	diskPath := entry.onDiskPath
+	entry.mu.RUnlock()
 
-    // colocar en memoria (y contabilizar)
-    e.mu.Lock()
-    e.inMem = data
-    e.sizeBytes = estimateSize(data)
-    e.mu.Unlock()
-    atomic.AddInt64(&c.memBytes, e.sizeBytes)
+	if diskPath == "" {
+		log.Printf("Partition %d has no data in memory or on disk", partitionID)
+		return nil
+	}
 
-    // posible spill si sobrepasa otro vez
-    if atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
-        go c.spillIfNeeded()
-    }
-    return data, nil
+	// Load data from disk (synchronous operation)
+	data := c.loadFromDisk(diskPath)
+	if data == nil {
+		log.Printf("Failed to load partition %d from disk at %s", partitionID, diskPath)
+		return nil
+	}
+
+	// Move loaded data back to memory and update accounting
+	entry.mu.Lock()
+	entry.inMem = data
+	entry.sizeBytes = estimateSize(data)
+	entry.onDiskPath = "" // Clear disk path since data is now in memory
+	entry.mu.Unlock()
+
+	atomic.AddInt64(&c.memBytes, entry.sizeBytes)
+
+	// Loading may have exceeded memory threshold - trigger spilling
+	if atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
+		go c.spillIfNeeded()
+	}
+
+	return data
 }
 
-func (c *PartitionCache) loadFromDisk(path string) ([]string, error) {
-    b, err := os.ReadFile(path)
-    if err != nil {
-        return nil, err
-    }
-    buf := bytes.NewBuffer(b)
-    dec := gob.NewDecoder(buf)
-    var data []string
-    if err := dec.Decode(&data); err != nil {
-        return nil, err
-    }
-    return data, nil
+// loadFromDisk reads and deserializes partition data from a gob-encoded file.
+// Returns nil if the file cannot be read or decoded.
+func (c *PartitionCache) loadFromDisk(path string) []types.Row {
+	// Read the entire file into memory
+	fileBytes, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("Error reading partition file %s: %v", path, err)
+		return nil
+	}
+
+	// Decode gob-encoded data
+	buffer := bytes.NewBuffer(fileBytes)
+	decoder := gob.NewDecoder(buffer)
+	var data []types.Row
+
+	if err := decoder.Decode(&data); err != nil {
+		log.Printf("Error decoding partition data from %s: %v", path, err)
+		return nil
+	}
+
+	return data
 }
 
+// spillPartition moves a partition's data from memory to disk storage.
+// The data is gob-encoded and written to a file, then memory is released.
+// Returns nil if the partition doesn't exist or is already on disk.
 func (c *PartitionCache) spillPartition(partitionID int) error {
-    c.mu.RLock()
-    e, ok := c.entries[partitionID]
-    c.mu.RUnlock()
-    if !ok {
-        return nil
-    }
+	// Find the partition entry
+	c.mu.RLock()
+	entry, exists := c.entries[partitionID]
+	c.mu.RUnlock()
 
-    e.mu.Lock()
-    if e.inMem == nil {
-        e.mu.Unlock()
-        return nil
-    }
-    data := e.inMem
-    path := filepath.Join(c.dir, fmt.Sprintf("partition_%d.gob", partitionID))
+	if !exists {
+		return nil // Partition doesn't exist - nothing to spill
+	}
 
-    // serializar a gob
-    var buf bytes.Buffer
-    enc := gob.NewEncoder(&buf)
-    if err := enc.Encode(data); err != nil {
-        e.mu.Unlock()
-        return err
-    }
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 
-    if err := os.WriteFile(path, buf.Bytes(), 0644); err != nil {
-        e.mu.Unlock()
-        return err
-    }
+	// Check if already spilled or empty
+	if entry.inMem == nil {
+		return nil // Already on disk or no data
+	}
 
-    // liberar memoria
-    size := e.sizeBytes
-    e.inMem = nil
-    e.sizeBytes = 0
-    e.onDiskPath = path
-    e.mu.Unlock()
+	// Prepare file path and serialize data
+	filePath := filepath.Join(c.dir, fmt.Sprintf("partition_%d.gob", partitionID))
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
 
-    atomic.AddInt64(&c.memBytes, -size)
-    return nil
+	if err := encoder.Encode(entry.inMem); err != nil {
+		return fmt.Errorf("failed to encode partition %d: %w", partitionID, err)
+	}
+
+	// Write serialized data to disk
+	if err := os.WriteFile(filePath, buffer.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write partition %d to disk: %w", partitionID, err)
+	}
+
+	// Update entry state and release memory
+	releasedBytes := entry.sizeBytes
+	entry.inMem = nil
+	entry.sizeBytes = 0
+	entry.onDiskPath = filePath
+
+	// Update global memory counter
+	atomic.AddInt64(&c.memBytes, -releasedBytes)
+	log.Printf("Spilled partition %d to disk (%d bytes freed)", partitionID, releasedBytes)
+
+	return nil
 }
 
-// Política simple: spill particiones más grandes hasta que memBytes <= MaxMemory
+// spillIfNeeded implements a simple eviction policy: spill largest partitions first.
+// Continues until memory usage drops below MaxMemory or no more partitions can be spilled.
+// This method runs in a loop to handle cases where multiple partitions need to be evicted.
 func (c *PartitionCache) spillIfNeeded() {
-    for atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
-        // construir lista de particiones con tamaño
-        c.mu.RLock()
-        entries := make([]*PartitionEntry, 0, len(c.entries))
-        for _, e := range c.entries {
-            entries = append(entries, e)
-        }
-        c.mu.RUnlock()
+	for atomic.LoadInt64(&c.memBytes) > c.MaxMemory {
+		// Collect all partition entries under read lock
+		c.mu.RLock()
+		entries := make([]*PartitionEntry, 0, len(c.entries))
+		for _, entry := range c.entries {
+			entries = append(entries, entry)
+		}
+		c.mu.RUnlock()
 
-        // ordenar por size desc
-        sort.Slice(entries, func(i, j int) bool {
-            return entries[i].sizeBytes > entries[j].sizeBytes
-        })
+		// Sort partitions by size (largest first) for efficient memory release
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].sizeBytes > entries[j].sizeBytes
+		})
 
-        spilled := false
-        for _, e := range entries {
-            e.mu.RLock()
-            if e.inMem == nil {
-                e.mu.RUnlock()
-                continue
-            }
-            e.mu.RUnlock()
+		// Attempt to spill the largest in-memory partition
+		spilledAny := false
+		for _, entry := range entries {
+			// Quick check if partition is in memory (avoid unnecessary work)
+			entry.mu.RLock()
+			inMemory := entry.inMem != nil
+			entry.mu.RUnlock()
 
-            if err := c.spillPartition(e.PartitionID); err == nil {
-                spilled = true
-                break
-            }
-        }
-        if !spilled {
-            // si no se pudo spill (todos ya en disco), rompemos
-            break
-        }
-        // pequeña pausa para evitar loop tight
-        time.Sleep(10 * time.Millisecond)
-    }
+			if !inMemory {
+				continue // Skip partitions already on disk
+			}
+
+			// Attempt to spill this partition
+			if err := c.spillPartition(entry.PartitionID); err == nil {
+				spilledAny = true
+				break // Success - check memory usage again
+			} else {
+				log.Printf("Failed to spill partition %d: %v", entry.PartitionID, err)
+			}
+		}
+
+		if !spilledAny {
+			// All partitions are already on disk - cannot reduce memory further
+			log.Printf("Warning: Cannot reduce memory usage - all partitions already spilled")
+			break
+		}
+
+		// Brief pause to prevent tight spinning and allow other operations
+		time.Sleep(10 * time.Millisecond)
+	}
 }

@@ -12,11 +12,12 @@ import (
 	"time"
 )
 
-const heartBeatInterval = 5
+const heartBeatInterval = 2
+const longFuncValue = 5
 
 type Worker struct {
 	ID            int
-	Partition     map[int][]string
+	Partition     map[int][]types.Row
 	TaskQueue     []types.Task
 	Status        int
 	Endpoint      string
@@ -26,14 +27,37 @@ type Worker struct {
 }
 
 var FuncRegistry = map[string]interface{}{
-	"ToUpper": func(s string) string { return strings.ToUpper(s) },
-	"IsLong":  func(s string) bool { return len(s) > 10 },
-	"SplitWords": func(s string) []string {
-		return strings.Split(s, " ")
-	},
-	"Concat": func(a, b string) string {
-		return a + b
-	},
+    "ToUpper": func(r types.Row) types.Row {
+		str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("ToUpper: expected string but got %T\n", r.Value)
+			return types.Row{Key: r.Key, Value: r.Value}
+		}
+		return types.Row{Key: r.Key, Value: strings.ToUpper(str)}
+    },
+
+    "IsLong": func(r types.Row) bool {
+        str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("IsLong: expected string but got %T\n", r.Value)
+			return false
+		}
+		return len(str) > longFuncValue
+    },
+
+    "SplitWords": func(r types.Row) []types.Row {
+        str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("SplitWords: expected string but got %T\n", r.Value)
+			return []types.Row{}
+		}
+		words := strings.Fields(str)
+		rows := make([]types.Row, len(words))
+		for i, word := range words {
+			rows[i] = types.Row{Key: r.Key, Value: word}
+		}
+		return rows
+    },
 }
 
 func NewWorker(driverAddress, address string, maxTasks int) *Worker {
@@ -41,7 +65,7 @@ func NewWorker(driverAddress, address string, maxTasks int) *Worker {
 
 	return &Worker{
 		ID:            randomInt,
-		Partition:     make(map[int][]string),
+		Partition:     make(map[int][]types.Row),
 		TaskQueue:     make([]types.Task, 0),
 		Status:        0,
 		Endpoint:      address,
@@ -51,24 +75,24 @@ func NewWorker(driverAddress, address string, maxTasks int) *Worker {
 	}
 }
 
-func ExecuteTransformation(w *Worker, t types.Transformation, data []string) ([]string, error) {
+func ExecuteTransformation(w *Worker, t types.Transformation, data []types.Row) ([]types.Row, error) {
 	_, exists := FuncRegistry[t.FuncName]
-	log.Printf("Worker %d executing transformation %s of type %d\n", w.ID, t.FuncName, t.Type)
 	if !exists {
 		return nil, fmt.Errorf("transformation function '%s' not found", t.FuncName)
 	}
 
+	log.Printf("Worker %d executing transformation %s of type %d\n", w.ID, t.FuncName, t.Type)
 	switch t.Type {
 	case types.MapOp:
-		fn := FuncRegistry[t.FuncName].(func(string) string)
+		fn := FuncRegistry[t.FuncName].(func(types.Row) types.Row)
 		data = utils.Map(data, fn)
 
 	case types.FilterOp:
-		fn := FuncRegistry[t.FuncName].(func(string) bool)
+		fn := FuncRegistry[t.FuncName].(func(types.Row) bool)
 		data = utils.Filter(data, fn)
 
 	case types.FlatMapOp:
-		fn := FuncRegistry[t.FuncName].(func(string) []string)
+		fn := FuncRegistry[t.FuncName].(func(types.Row) []types.Row)
 		data = utils.FlatMap(data, fn)
 
 		// case types.ReduceOp: TODO
@@ -90,11 +114,7 @@ func (w *Worker) ExecuteTask(task types.Task, reply *types.TaskReply) error {
 		w.ActiveTasks--
 	}()
 
-	data, ok := task.Data.([]string)
-	if !ok {
-		log.Printf("Worker %d: ERROR - Task data is not []string\n", w.ID)
-		return fmt.Errorf("invalid task data type for task %d", task.ID)
-	}
+	data := task.Data
 
 	// Apply transformations
 	for _, t := range task.Transformations {
@@ -118,15 +138,15 @@ func (w *Worker) GetStatus(args struct{}, reply *int) error {
 }
 
 // StorePartition stores a partition on this worker
-func (w *Worker) StorePartition(partitionID int, data []byte) error {
-	w.Partition[partitionID] = []string{string(data)}
-	log.Printf("Worker %d stored partition %d\n", w.ID, partitionID)
-	return nil
+func (w *Worker) StorePartition(partitionID int, rows []types.Row) error {
+    w.Partition[partitionID] = rows
+    log.Printf("Worker %d stored partition %d with %d rows\n", w.ID, partitionID, len(rows))
+    return nil
 }
 
 func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 	// Aquí podrías implementar la lógica para registrar la partición
-	w.Partition[partitionID] = []string{}
+	w.Partition[partitionID] = []types.Row{}
 	log.Printf("Worker %d registered partition %d\n", w.ID, partitionID)
 	*reply = true
 	return nil

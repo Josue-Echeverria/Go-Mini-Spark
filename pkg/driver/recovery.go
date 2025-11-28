@@ -11,14 +11,11 @@ import (
 )
 
 func (d *Driver) RegisterJob(job types.Job) {
-	log.Printf("Registering job %d with status %s", job.ID, job.Status)
 	d.Jobs[job.ID] = &job
 }
 
 // SaveJobState RPC method - persiste el estado de un job a un archivo JSON
 func (d *Driver) SaveJobState(jobID int, state string) {
-	log.Printf("Saving job %d with state: %s", jobID, state)
-
 	// Crear directorio si no existe
 	if err := os.MkdirAll(d.StateDir, 0755); err != nil {
 		log.Printf("Error creating state directory: %v", err)
@@ -45,8 +42,6 @@ func (d *Driver) SaveJobState(jobID int, state string) {
 	if err != nil {
 		log.Printf("Error writing job state to file: %v", err)
 	}
-
-	log.Printf("Job %d state saved successfully", jobID)
 }
 
 // LoadJobState carga el estado de un job desde un archivo JSON
