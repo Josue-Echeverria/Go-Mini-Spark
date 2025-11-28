@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.8.0 (2025-11-28)
+
+### Features
+
+- Improves RDD caching and task execution
+  ([`6465905`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/64659056f855717113f808ba90fc16ee4884bb67))
+
+Introduces a partition cache with memory management and disk spilling to improve performance.
+
+Updates the task execution flow to leverage the cache, and modifies the data types being managed.
+
+Includes large file generation script for testing purposes.
+
+
 ## v0.7.0 (2025-11-27)
 
 ### Features
