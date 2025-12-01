@@ -1,4 +1,0 @@
-hello world
-spark is great
-go programming
-distributed computing"

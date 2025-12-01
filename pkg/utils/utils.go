@@ -9,9 +9,100 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"sort"
 	"Go-Mini-Spark/pkg/types"
+	"strings"
 )
+
+const longFuncValue = 5
+
+var toInt = func(row types.Row) (int, bool) {
+	switch v := row.Value.(type) {
+	case int:
+		return v, true
+	case string:
+		if num, err := strconv.Atoi(v); err == nil {
+			return num, true
+		}
+		return 0, false
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+var FuncRegistry = map[string]interface{}{
+    "ToUpper": func(r types.Row) types.Row {
+		str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("ToUpper: expected string but got %T\n", r.Value)
+			return types.Row{Key: r.Key, Value: r.Value}
+		}
+		return types.Row{Key: r.Key, Value: strings.ToUpper(str)}
+    },
+
+	"ToLower": func(r types.Row) types.Row {
+		str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("ToLower: expected string but got %T\n", r.Value)
+			return types.Row{Key: r.Key, Value: r.Value}
+		}
+		return types.Row{Key: r.Key, Value: strings.ToLower(str)}
+    },
+
+	"CountVowels": func(r types.Row) types.Row {
+		str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("CountVowels: expected string but got %T\n", r.Value)
+			return types.Row{Key: r.Key, Value: 0}
+		}
+		count := 0
+		for _, char := range str {
+			if strings.ContainsRune("aeiouAEIOU", char) {
+				count++
+			}
+		}
+		return types.Row{Key: r.Key, Value: count}
+	},
+
+    "IsLong": func(r types.Row) bool {
+        str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("IsLong: expected string but got %T\n", r.Value)
+			return false
+		}
+		return len(str) > longFuncValue
+    },
+
+    "SplitWords": func(r types.Row) []types.Row {
+        str, ok := r.Value.(string)
+		if !ok {
+			log.Printf("SplitWords: expected string but got %T\n", r.Value)
+			return []types.Row{}
+		}
+		words := strings.Fields(str)
+		rows := make([]types.Row, len(words))
+		for i, word := range words {
+			rows[i] = types.Row{Key: r.Key, Value: word}
+		}
+		return rows
+    },
+
+	"Max": func(a types.Row, b types.Row) types.Row {
+		numA, okA := toInt(a)
+		numB, okB := toInt(b)
+		if !okA || !okB {
+			log.Printf("max: expected int but got %T and %T\n", a.Value, b.Value)
+			return types.Row{Key: nil, Value: 0}
+		}
+		if numA > numB {
+			return a
+		}
+		return b
+	},
+}
 
 // Map applies a function to each element in a slice and returns a new slice
 func Map(data []types.Row, fn func(types.Row) types.Row) []types.Row {
@@ -79,39 +170,15 @@ func Join(left []map[string]interface{}, right []map[string]interface{}, leftKey
 	return result
 }
 
-// Reduce applies a function cumulatively to the items of a collection
-func Reduce(data []string, initialValue string, fn func(string, string) string) string {
-	accumulator := initialValue
-	for _, item := range data {
-		accumulator = fn(accumulator, item)
-	}
-	return accumulator
-}
-
-// ReduceByKey groups elements by key and applies a reduction function to each group
-func ReduceByKey(data []map[string]interface{}, keyField string, valueField string, fn func(string, string) string) map[interface{}]string {
-	groups := make(map[interface{}][]string)
-
-	// Group by key
-	for _, item := range data {
-		if key, keyExists := item[keyField]; keyExists {
-			if value, valueExists := item[valueField]; valueExists {
-				if strValue, ok := value.(string); ok {
-					groups[key] = append(groups[key], strValue)
-				}
-			}
-		}
-	}
-
-	// Reduce each group
-	result := make(map[interface{}]string)
-	for key, values := range groups {
-		if len(values) > 0 {
-			result[key] = Reduce(values, values[0], fn)
-		}
-	}
-
-	return result
+func Reduce(data []types.Row, fn func(a types.Row, b types.Row) types.Row) types.Row {
+    if len(data) == 0 {
+        return types.Row{}   
+    }
+    acc := data[0]
+    for i := 1; i < len(data); i++ {
+        acc = fn(acc, data[i])
+    }
+    return acc
 }
 
 // Shuffle redistributes data across partitions based on key hashing

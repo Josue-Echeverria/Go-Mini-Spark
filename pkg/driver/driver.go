@@ -14,7 +14,7 @@ import (
 var rddCounter uint64
 
 const WorkerTimeoutSeconds = 10
-const maxMem = 70 * 1024 * 1024 // 70 MB
+const maxMem = 100 * 1024 * 1024
 
 type Driver struct {
 	Workers         map[int]types.WorkerInfo
@@ -73,37 +73,10 @@ func ConnectDriver(masterAddress string) *rpc.Client {
 	return client
 }
 
-func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
-	*reply = DriverInfo{
-		Workers:      d.Workers,
-		PartitionMap: d.PartitionMap,
-		Port:         d.Port,
-	}
-	return nil
-}
-
 func (d *Driver) RegisterWorker(info types.WorkerInfo, reply *bool) error {
 	d.Workers[info.ID] = info
 	log.Printf("Registered worker %d at %s\n", info.ID, info.Endpoint)
 	*reply = true
-	return nil
-}
-
-func (d *Driver) GetWorkerWithPartition(partitionID int, reply *int) error {
-	workerID, exists := d.PartitionMap[partitionID]
-	if !exists {
-		return fmt.Errorf("no worker found for partition %d", partitionID)
-	}
-	*reply = d.Workers[workerID].ID
-	return nil
-}
-
-func (d *Driver) GetWorker(id int, reply *int) error {
-	_, exists := d.Workers[id]
-	if !exists {
-		return fmt.Errorf("worker %d not found", id)
-	}
-	*reply = d.Workers[id].ID
 	return nil
 }
 

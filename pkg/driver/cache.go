@@ -49,23 +49,71 @@ func NewPartitionCache(dir string, maxMem int64) (*PartitionCache, error) {
 	}, nil
 }
 
+// estimateSizeSimple calculates basic string content size without encoding overhead
+func estimateSizeSimple(data []types.Row) int64 {
+    var totalSize int64
+    for _, row := range data {
+        // Count raw string content only
+        if keyStr, ok := row.Key.(string); ok {
+            totalSize += int64(len(keyStr))
+        }
+        if valueStr, ok := row.Value.(string); ok {
+            totalSize += int64(len(valueStr))
+        }
+        // Add basic struct overhead (rough estimate)
+        totalSize += 32 // estimated per-row overhead
+    }
+    return totalSize
+}
+
 // estimateSize calculates the approximate memory footprint of string slice data.
 // Includes string content length plus estimated overhead (16 bytes per string for slice header/pointer).
 func estimateSize(data []types.Row) int64 {
-	var totalSize int64
-	for _, row := range data {
-		// Estimate size of Key and Value assuming they are strings for simplicity
-		if keyStr, ok := row.Key.(string); ok {
-			totalSize += int64(len(keyStr))
-			totalSize += 16
-		}
-		if valueStr, ok := row.Value.(string); ok {
-			totalSize += int64(len(valueStr))
-			totalSize += 16
-		}
-	}
-	return totalSize
+    // Option 1: Sample-based estimation
+    if len(data) == 0 {
+        return 0
+    }
+    
+    // Encode a small sample to measure overhead
+    sampleSize := min(10, len(data))
+    sample := data[:sampleSize]
+    
+    var buffer bytes.Buffer
+    encoder := gob.NewEncoder(&buffer)
+    encoder.Encode(sample)
+    
+    // Calculate overhead ratio
+    rawSize := int64(0)
+    for _, row := range sample {
+        if keyStr, ok := row.Key.(string); ok {
+            rawSize += int64(len(keyStr))
+        }
+        if valueStr, ok := row.Value.(string); ok {
+            rawSize += int64(len(valueStr))
+        }
+    }
+    
+    if rawSize > 0 {
+        overhead := float64(buffer.Len()) / float64(rawSize)
+        
+        // Apply overhead to full dataset
+        totalRawSize := int64(0)
+        for _, row := range data {
+            if keyStr, ok := row.Key.(string); ok {
+                totalRawSize += int64(len(keyStr))
+            }
+            if valueStr, ok := row.Value.(string); ok {
+                totalRawSize += int64(len(valueStr))
+            }
+        }
+        
+        return int64(float64(totalRawSize) * overhead)
+    }
+    
+    // Fallback: Conservative estimate with 50% overhead
+    return estimateSizeSimple(data) * 3 / 2
 }
+
 
 // Put stores partition data in memory and triggers spilling if memory threshold is exceeded.
 // If the partition already exists, its data is replaced and memory accounting is updated.

@@ -1,4 +1,6 @@
 bin/
 driver_state/
 testing/largefile.txt
+testing/largefile2.txt
 testing/numbers.txt
+partition_cache/
