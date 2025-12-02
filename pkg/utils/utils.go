@@ -174,44 +174,132 @@ func HashPartition(key string, numPartitions int) int {
     return int(h.Sum32()) % numPartitions
 }
 
-// WriteCSV writes data to a CSV file
-func WriteCSV(filename string, data []map[string]interface{}) error {
-	if len(data) == 0 {
-		return fmt.Errorf("no data to write")
-	}
+func Join(leftRows []types.Row, rightRows []types.Row) []types.Row {
+    // 1. Construimos un índice por clave para el lado derecho
+    rightIndex := make(map[interface{}][]types.Row)
+    for _, r := range rightRows {
+        rightIndex[r.Key] = append(rightIndex[r.Key], r)
+    }
 
-	file, err := os.Create(filename)
-	if err != nil {
-		log.Printf("Error creating CSV file %s: %v\n", filename, err)
-		return err
-	}
-	defer file.Close()
+    var result []types.Row
 
-	// Get headers from first row
-	var headers []string
-	firstRow := data[0]
-	for key := range firstRow {
-		headers = append(headers, key)
-	}
-	sort.Strings(headers) // Sort for consistent ordering
+    // 2. Recorremos el lado izquierdo y buscamos coincidencias
+    for _, left := range leftRows {
+        matches := rightIndex[left.Key]
+        if len(matches) == 0 {
+            continue // no hay match
+        }
 
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
+        leftMap, ok := left.Value.(map[string]interface{})
+        if !ok {
+            continue
+        }
 
-	// Write headers
-	writer.Write(headers)
+        for _, right := range matches {
+            rightMap, ok := right.Value.(map[string]interface{})
+            if !ok {
+                continue
+            }
 
-	// Write data rows
-	for _, row := range data {
-		record := make([]string, len(headers))
-		for i, header := range headers {
-			record[i] = fmt.Sprintf("%v", row[header])
-		}
-		writer.Write(record)
-	}
+            // 3. Crear value combinado (shallow merge)
+            merged := make(map[string]interface{})
 
-	return nil
+            // copiar left
+            for k, v := range leftMap {
+                merged[k] = v
+            }
+            // copiar right (si hay colisiones, right sobrescribe)
+            for k, v := range rightMap {
+                merged[k] = v
+            }
+
+            // 4. Añadir resultado
+            result = append(result, types.Row{
+                Key:   left.Key,  // clave del join
+                Value: merged,
+            })
+        }
+    }
+
+    return result
 }
+
+
+// WriteCSV writes a slice of Row into a CSV file.
+// Assumes: Row.Key = ID, Row.Value = map[string]interface{}
+func WriteCSV(filename string, data []types.Row) error {
+    if len(data) == 0 {
+        return fmt.Errorf("no data to write")
+    }
+
+    file, err := os.Create(filename)
+    if err != nil {
+        log.Printf("Error creating CSV file %s: %v\n", filename, err)
+        return err
+    }
+    defer file.Close()
+
+    writer := csv.NewWriter(file)
+    defer writer.Flush()
+
+    // Extract headers from first row
+    first := data[0]
+
+    valueMap, ok := first.Value.(map[string]interface{})
+    if !ok {
+        return fmt.Errorf("WriteCSV: row.Value is not a map[string]interface{}")
+    }
+
+    // Build header list
+    headers := []string{"id"} // "id" always first
+
+    for k := range valueMap {
+        if k != "id" { // avoid duplicating if it exists inside the map
+            headers = append(headers, k)
+        }
+    }
+
+    sort.Strings(headers[1:]) // sort all except the first
+
+    // Write headers
+    if err := writer.Write(headers); err != nil {
+        return err
+    }
+
+    // Write rows
+    for _, row := range data {
+        valueMap, ok := row.Value.(map[string]interface{})
+        if !ok {
+            continue
+        }
+
+        record := make([]string, len(headers))
+
+        for i, h := range headers {
+            if h == "id" {
+                record[i] = fmt.Sprintf("%v", row.Key)
+            } else {
+                record[i] = fmt.Sprintf("%v", valueMap[h])
+            }
+        }
+
+        if err := writer.Write(record); err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+
+func FlattenPartition(joinedPartitions map[int][]types.Row) []types.Row {
+	flat := []types.Row{}
+	for partID, rows := range joinedPartitions {
+		log.Printf("Adding %d rows from partition %d", len(rows), partID)
+		flat = append(flat, rows...)
+	}
+	return flat
+}
+
 
 // ReadJSONL reads data from a JSONL (JSON Lines) file and returns it as a slice of maps
 func ReadJSONL(filename string) ([]map[string]interface{}, error) {

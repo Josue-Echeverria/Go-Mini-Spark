@@ -174,7 +174,7 @@ func genSalesCSV(path string, records int) error {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Header CSV
-	if _, err := w.WriteString("id,product_id,customer_id,quantity,unit_price,total_amount,sale_date,region\n"); err != nil {
+	if _, err := w.WriteString("id,customer_id,quantity,unit_price,total_amount,sale_date,region\n"); err != nil {
 		return err
 	}
 
@@ -183,7 +183,6 @@ func genSalesCSV(path string, records int) error {
 	baseDate := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	for i := 0; i < records; i++ {
-		saleID := i + 1
 		productID := r.Intn(catalogRecords) + 1        // ProductID entre 1-5000
 		customerID := r.Intn(50000) + 1       // CustomerID entre 1-50000
 		quantity := r.Intn(10) + 1            // Cantidad entre 1-10
@@ -196,7 +195,7 @@ func genSalesCSV(path string, records int) error {
 		region := regions[r.Intn(len(regions))]
 
 		line := fmt.Sprintf("%d,%d,%d,%d,%.2f,%.2f,%s,%s\n",
-			saleID, productID, customerID, quantity, unitPrice, totalAmount,
+			productID, customerID, quantity, unitPrice, totalAmount,
 			saleDate.Format("2006-01-02"), region)
 
 		if _, err := w.WriteString(line); err != nil {

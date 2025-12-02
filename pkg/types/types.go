@@ -26,6 +26,11 @@ const (
 	JoinOp
 )
 
+type ReadCSVArg struct {
+	FilePath      string
+	KeyColumn     string
+}
+
 type Transformation struct {
 	Type     TransformationType
 	FuncName string // nombre de la función
@@ -37,6 +42,12 @@ type Task struct {
 	PartitionID     int
     Data            []Row 
 	Transformations []Transformation
+}
+
+type TaskJoin struct {
+	ID          int
+    LeftRows    []Row
+    RightRows   []Row
 }
 
 type TaskReply struct {

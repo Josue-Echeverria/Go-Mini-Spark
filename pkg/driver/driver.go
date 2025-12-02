@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/rpc"
+	"encoding/gob"
 	"os"
 	"io"
 	"encoding/csv"
@@ -31,6 +32,13 @@ type Driver struct {
 	nextPartitionID int
 	Cache           *PartitionCache
 	StateDir        string
+}
+// Source - https://stackoverflow.com/a
+// Posted by Andrew
+// Retrieved 2025-12-02, License - CC BY-SA 3.0
+func init() {
+	gob.Register(types.Row{})
+	gob.Register(map[string]any{})
 }
 
 func newID() int {
@@ -160,10 +168,10 @@ func (d *Driver) ReadRDDTextFile(filename string, reply *int) error {
     return nil
 }
 
-func (d *Driver) ReadCSV(filename string, reply *int) error {
-	file, err := os.Open(filename)
+func (d *Driver) ReadCSV(arg types.ReadCSVArg, reply *int) error {
+	file, err := os.Open(arg.FilePath)
 	if err != nil {
-		log.Printf("Error opening CSV file %s: %v\n", filename, err)
+		log.Printf("Error opening CSV file %s: %v\n", arg.FilePath, err)
 		return err
 	}
 	defer file.Close()
@@ -186,7 +194,7 @@ func (d *Driver) ReadCSV(filename string, reply *int) error {
 			continue
 		}
 
-		idx := utils.FindIndex(headers, "id")
+		idx := utils.FindIndex(headers, arg.KeyColumn)
 		key := record[idx]
 		valueMap := make(map[string]interface{})
 		for i, header := range headers {

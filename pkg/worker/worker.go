@@ -9,7 +9,13 @@ import (
 	"net"
 	"net/rpc"
 	"time"
+	"encoding/gob"
 )
+
+func init() {
+	gob.Register(types.Row{})
+	gob.Register(map[string]any{})
+}
 
 const heartBeatInterval = 2
 
@@ -110,10 +116,20 @@ func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 	return nil
 }
 
-func (w *Worker) UnregisterPartition(partitionID int, reply *bool) error {
-	delete(w.Partition, partitionID)
-	log.Printf("Worker %d unregistered partition %d\n", w.ID, partitionID)
-	*reply = true
+func (w *Worker) ExecuteJoin(task types.TaskJoin, reply *types.TaskReply) error {
+	log.Printf("Worker %d executing join task %d\n", w.ID, task.ID)
+	w.ActiveTasks++
+	defer func() {
+		w.ActiveTasks--
+	}()
+
+	leftData := task.LeftRows
+	rightData := task.RightRows
+
+	joinedData := utils.Join(leftData, rightData)
+
+	reply.Data = joinedData
+	// log.Printf("completed task %d with %s results\n", task.ID, data)
 	return nil
 }
 

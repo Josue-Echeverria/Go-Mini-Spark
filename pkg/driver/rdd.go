@@ -200,6 +200,7 @@ func (d *Driver) Reduce(id int, reply *[]types.Row) error {
 func (d *Driver) Join(request types.JoinRequest, reply *int) error {
     r1, exists1 := d.RDDRegistry[request.RddID1]
     r2, exists2 := d.RDDRegistry[request.RddID2]
+    numPartitions := max(r1.NumPartitions, r2.NumPartitions)
     
     if !exists1 || !exists2 {
         return fmt.Errorf("one or both RDDs not found")
@@ -211,42 +212,61 @@ func (d *Driver) Join(request types.JoinRequest, reply *int) error {
     results1 := d.SendTasks(tasks1)
     results2 := d.SendTasks(tasks2)
     
-	flat := []types.Row{}
-	for _, chunk := range results1 {
-		flat = append(flat, chunk...)
-	}
-    for _, chunk := range results2 {
-        flat = append(flat, chunk...)
-    }
+    flat1 := []types.Row{}
+    flat2 := []types.Row{}
 
+    for _, part := range results1 { flat1 = append(flat1, part...) }
+    for _, part := range results2 { flat2 = append(flat2, part...) }
+
+    leftParts  := utils.Shuffle(flat1, numPartitions)
+    rightParts := utils.Shuffle(flat2, numPartitions)
     log.Printf("Join solicitado entre RDD %d y RDD %d\n", r1.ID, r2.ID)
 
-    newPartitions := utils.Shuffle(flat, r1.NumPartitions)
+    joinedPartitions := make(map[int][]types.Row)
+    var mu sync.Mutex
+    var wg sync.WaitGroup
+    wg.Add(numPartitions)
 
-    for partitionID, rows := range newPartitions {
-        d.Cache.Put(partitionID, rows)
+    for partID := 0; partID < numPartitions; partID++ {
+        go func(partID int) {
+            defer wg.Done()
+
+            leftRows  := leftParts[partID]
+            rightRows := rightParts[partID]
+
+            workerID := d.PartitionMap[partID]
+            workerAddr := d.Workers[workerID].Endpoint
+
+            task := types.TaskJoin{
+                ID:          newID(),
+                LeftRows:    leftRows,
+                RightRows:   rightRows,
+            }
+ 
+            client, err := rpc.Dial("tcp", workerAddr)
+            if err != nil {
+                log.Printf("Join: worker %d offline: %v\n", workerID, err)
+                return
+            }
+            defer client.Close()
+
+            var reply types.TaskReply
+            err = client.Call("Worker.ExecuteJoin", task, &reply)
+            if err != nil {
+                log.Printf("Join: task %d failed on worker %d: %v\n", task.ID, workerID, err)
+                return
+            }
+
+            mu.Lock()
+            joinedPartitions[partID] = reply.Data
+            mu.Unlock()
+        }(partID)
     }
-    // ============================================================
-    // TODO SHUFFLE STEP:
-    // 
-    // 1. Para cada RDD:
-    //      - pedir a cada worker que envíe (key,row) por partición destino
-    //        destino = hash(key) % numPartitions
-    //      - el driver reenvía los rows al worker dueño de esa partición
-    //
-    // 2. Resultado: ambos RDD quedan con datos particionados por key.
-    //
-    // Implementar:
-    //    d.shuffleByKey(r1)
-    //    d.shuffleByKey(r2)
-    //
-    // ============================================================
 
-    // Crear el nuevo RDD resultado del join
+    wg.Wait()
 
+    flatJoined := utils.FlattenPartition(joinedPartitions)
+    utils.WriteCSV("result.csv", flatJoined) // escribir solo la primera partición como ejemplo)
 
-    // d.RegisterRDD(newRDD)
-
-    // *reply = newRDD.ID
     return nil
 }
