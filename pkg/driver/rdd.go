@@ -5,6 +5,7 @@ import (
     "Go-Mini-Spark/pkg/utils"
 	"log"
 	"math/rand"
+    "fmt"
 	"net/rpc"
 	"sync"
 )
@@ -193,5 +194,59 @@ func (d *Driver) Reduce(id int, reply *[]types.Row) error {
     d.SaveJobState(job.ID, "completed")
     
     *reply = []types.Row{result}
+    return nil
+}
+
+func (d *Driver) Join(request types.JoinRequest, reply *int) error {
+    r1, exists1 := d.RDDRegistry[request.RddID1]
+    r2, exists2 := d.RDDRegistry[request.RddID2]
+    
+    if !exists1 || !exists2 {
+        return fmt.Errorf("one or both RDDs not found")
+    }
+
+    tasks1 := r1.GetTasks()
+    tasks2 := r2.GetTasks()
+
+    results1 := d.SendTasks(tasks1)
+    results2 := d.SendTasks(tasks2)
+    
+	flat := []types.Row{}
+	for _, chunk := range results1 {
+		flat = append(flat, chunk...)
+	}
+    for _, chunk := range results2 {
+        flat = append(flat, chunk...)
+    }
+
+    log.Printf("Join solicitado entre RDD %d y RDD %d\n", r1.ID, r2.ID)
+
+    newPartitions := utils.Shuffle(flat, r1.NumPartitions)
+
+    for partitionID, rows := range newPartitions {
+        d.Cache.Put(partitionID, rows)
+    }
+    // ============================================================
+    // TODO SHUFFLE STEP:
+    // 
+    // 1. Para cada RDD:
+    //      - pedir a cada worker que envíe (key,row) por partición destino
+    //        destino = hash(key) % numPartitions
+    //      - el driver reenvía los rows al worker dueño de esa partición
+    //
+    // 2. Resultado: ambos RDD quedan con datos particionados por key.
+    //
+    // Implementar:
+    //    d.shuffleByKey(r1)
+    //    d.shuffleByKey(r2)
+    //
+    // ============================================================
+
+    // Crear el nuevo RDD resultado del join
+
+
+    // d.RegisterRDD(newRDD)
+
+    // *reply = newRDD.ID
     return nil
 }

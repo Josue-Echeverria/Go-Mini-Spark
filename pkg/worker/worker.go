@@ -102,13 +102,6 @@ func (w *Worker) GetStatus(args struct{}, reply *int) error {
 	return nil
 }
 
-// StorePartition stores a partition on this worker
-func (w *Worker) StorePartition(partitionID int, rows []types.Row) error {
-    w.Partition[partitionID] = rows
-    log.Printf("Worker %d stored partition %d with %d rows\n", w.ID, partitionID, len(rows))
-    return nil
-}
-
 func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 	// Aquí podrías implementar la lógica para registrar la partición
 	w.Partition[partitionID] = []types.Row{}
@@ -117,7 +110,11 @@ func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 	return nil
 }
 
-func SendResultToDriver(result string) {
+func (w *Worker) UnregisterPartition(partitionID int, reply *bool) error {
+	delete(w.Partition, partitionID)
+	log.Printf("Worker %d unregistered partition %d\n", w.ID, partitionID)
+	*reply = true
+	return nil
 }
 
 // SendHeartbeat envía un heartbeat al driver
