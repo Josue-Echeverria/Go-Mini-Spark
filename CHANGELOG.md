@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.10.0 (2025-12-02)
+
+### Features
+
+- Advances in the implementation of Join operation
+  ([`39f714f`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/39f714f36cc02f549639ab049f20f8ae03500794))
+
+
 ## v0.9.0 (2025-12-01)
 
 ### Features
