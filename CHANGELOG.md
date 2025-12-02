@@ -1,6 +1,9 @@
 # CHANGELOG
 
 
+## v0.11.0 (2025-12-02)
+
+
 ## v0.10.0 (2025-12-02)
 
 ### Features
@@ -12,6 +15,9 @@
 ## v0.9.0 (2025-12-01)
 
 ### Features
+
+- Client API
+  ([`d798621`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/d798621973fdd39cc0aed3330e89a51faf30339a))
 
 - Implements basic reduce operation.
   ([`8f20b31`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/8f20b31011d89c119acd4e4e5ad05d455686ceab))
