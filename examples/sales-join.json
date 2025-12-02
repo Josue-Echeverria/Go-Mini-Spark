@@ -1,0 +1,46 @@
+{
+  "name": "sales-join-analysis",
+  "dag": {
+    "nodes": [
+      {
+        "id": "read_sales",
+        "op": "read_csv",
+        "path": "data/sales/*.csv",
+        "partitions": 4
+      },
+      {
+        "id": "read_catalog",
+        "op": "read_csv",
+        "path": "data/catalog.csv",
+        "partitions": 2
+      },
+      {
+        "id": "join",
+        "op": "join",
+        "key": "product_id"
+      },
+      {
+        "id": "filter",
+        "op": "filter",
+        "fn": "filter_high_value"
+      },
+      {
+        "id": "aggregate",
+        "op": "reduce_by_key",
+        "key": "category",
+        "fn": "sum_sales"
+      }
+    ],
+    "edges": [
+      ["read_sales", "join"],
+      ["read_catalog", "join"],
+      ["join", "filter"],
+      ["filter", "aggregate"]
+    ]
+  },
+  "parallelism": 4,
+  "config": {
+    "min_value": 100,
+    "output_format": "csv"
+  }
+}

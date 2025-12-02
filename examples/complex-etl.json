@@ -1,0 +1,79 @@
+{
+  "name": "complex-etl-pipeline",
+  "dag": {
+    "nodes": [
+      {
+        "id": "read_transactions",
+        "op": "read_csv",
+        "path": "data/transactions/*.csv",
+        "partitions": 8
+      },
+      {
+        "id": "read_customers",
+        "op": "read_csv",
+        "path": "data/customers.csv",
+        "partitions": 4
+      },
+      {
+        "id": "read_products",
+        "op": "read_csv",
+        "path": "data/products.csv",
+        "partitions": 2
+      },
+      {
+        "id": "filter_valid",
+        "op": "filter",
+        "fn": "is_valid_transaction"
+      },
+      {
+        "id": "enrich_customer",
+        "op": "join",
+        "key": "customer_id"
+      },
+      {
+        "id": "enrich_product",
+        "op": "join",
+        "key": "product_id"
+      },
+      {
+        "id": "calculate_metrics",
+        "op": "map",
+        "fn": "add_calculated_fields"
+      },
+      {
+        "id": "group_by_category",
+        "op": "reduce_by_key",
+        "key": "category",
+        "fn": "sum_revenue"
+      },
+      {
+        "id": "top_categories",
+        "op": "filter",
+        "fn": "filter_top_10"
+      },
+      {
+        "id": "format_output",
+        "op": "map",
+        "fn": "format_report"
+      }
+    ],
+    "edges": [
+      ["read_transactions", "filter_valid"],
+      ["filter_valid", "enrich_customer"],
+      ["read_customers", "enrich_customer"],
+      ["enrich_customer", "enrich_product"],
+      ["read_products", "enrich_product"],
+      ["enrich_product", "calculate_metrics"],
+      ["calculate_metrics", "group_by_category"],
+      ["group_by_category", "top_categories"],
+      ["top_categories", "format_output"]
+    ]
+  },
+  "parallelism": 8,
+  "config": {
+    "output_format": "csv",
+    "output_path": "output/etl_results",
+    "cache_intermediate": true,
+    "max_memory_per_partition": "100MB"
+  }
+}

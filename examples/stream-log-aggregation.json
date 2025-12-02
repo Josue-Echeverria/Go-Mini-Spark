@@ -1,0 +1,57 @@
+{
+  "name": "log-stream-aggregation",
+  "operators": [
+    {
+      "id": "source",
+      "type": "source",
+      "args": {
+        "type": "file",
+        "path": "data/logs.jsonl"
+      }
+    },
+    {
+      "id": "parse",
+      "type": "map",
+      "fn": "parse_log_line"
+    },
+    {
+      "id": "filter_errors",
+      "type": "filter",
+      "fn": "is_error_level"
+    },
+    {
+      "id": "key_by_service",
+      "type": "key_by",
+      "key": "service"
+    },
+    {
+      "id": "window_agg",
+      "type": "window_aggregate",
+      "fn": "count"
+    },
+    {
+      "id": "sink",
+      "type": "sink",
+      "args": {
+        "type": "file",
+        "path": "output/error_counts.jsonl"
+      }
+    }
+  ],
+  "wiring": [
+    ["source", "parse"],
+    ["parse", "filter_errors"],
+    ["filter_errors", "key_by_service"],
+    ["key_by_service", "window_agg"],
+    ["window_agg", "sink"]
+  ],
+  "windows": {
+    "type": "tumbling",
+    "size_seconds": 60,
+    "slide_seconds": 60
+  },
+  "config": {
+    "checkpoint_interval_seconds": 10,
+    "parallelism": 2
+  }
+}

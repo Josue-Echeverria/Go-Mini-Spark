@@ -1,61 +1,50 @@
 package main
 
 import (
-	. "Go-Mini-Spark/pkg/driver"
+	"flag"
 	"fmt"
-	"Go-Mini-Spark/pkg/types"
+	"os"
 )
 
 func main() {
-	connection := ConnectDriver("localhost:9000") // Se conecta al Driver
+	masterURL := flag.String("url", "http://localhost:8080", "Master URL")
+	flag.Parse()
 
-	
-	var rddID int
-	err := connection.Call("Driver.ReadRDDTextFile", "testing/largefile2.txt", &rddID)
-	if err != nil {
-		fmt.Println("Error reading RDD from text file:", err)
-		return
+	args := flag.Args()
+	if len(args) < 1 {
+		printUsage()
+		os.Exit(1)
 	}
 
-	var rddID2 int
-	err = connection.Call("Driver.Map", rddID, &rddID2)
-	if err != nil {
-		fmt.Println("Error applying Map transformation:", err)
-		return
+	client := NewClient(*masterURL)
+	command := args[0]
+	commandArgs := args[1:]
+
+	var err error
+	switch command {
+	case "submit-job":
+		err = submitJobCommand(client, commandArgs)
+	case "submit-topology":
+		err = submitTopologyCommand(client, commandArgs)
+	case "status":
+		err = statusCommand(client, commandArgs)
+	case "results":
+		err = resultsCommand(client, commandArgs)
+	case "watch":
+		err = watchCommand(client, commandArgs)
+	case "ingest":
+		err = ingestCommand(client, commandArgs)
+	case "help", "-h", "--help":
+		printUsage()
+		os.Exit(0)
+	default:
+		fmt.Printf("Unknown command: %s\n", command)
+		printUsage()
+		os.Exit(1)
 	}
 
-	// rdd3 := rdd2.Filter()
-
-	// Acción -> aquí sí se ejecuta en los workers
-	var result []types.Row
-	err = connection.Call("Driver.Collect", rddID2, &result)
 	if err != nil {
-		fmt.Println("Error collecting results:", err)
-		return
-	}
-
-	// err = connection.Call("Driver.ReadRDDTextFile", "testing/numbers.txt", &rddID)
-	// if err != nil {
-	// 	fmt.Println("Error reading RDD from text file:", err)
-	// 	return
-	// }
-	
-	// err = connection.Call("Driver.Map", rddID, &rddID2)
-	// if err != nil {
-	// 	fmt.Println("Error applying Map transformation:", err)
-	// 	return
-	// }
-	
-	// err = connection.Call("Driver.Collect", rddID2, &result)
-	// if err != nil {
-	// 	fmt.Println("Error collecting results:", err)
-	// 	return
-	// }
-
-	// Print results properly
-	fmt.Printf("Final result: %v\n", result)
-
-	for i, r := range result {
-		fmt.Printf("%v\n", i, r)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
