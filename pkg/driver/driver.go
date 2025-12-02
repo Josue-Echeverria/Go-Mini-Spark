@@ -2,10 +2,13 @@ package driver
 
 import (
 	"Go-Mini-Spark/pkg/types"
+	"Go-Mini-Spark/pkg/utils"
 	"log"
 	"net"
 	"net/rpc"
 	"os"
+	"io"
+	"encoding/csv"
 	"strings"
 	"sync/atomic"
 	"fmt"
@@ -14,7 +17,7 @@ import (
 var rddCounter uint64
 
 const WorkerTimeoutSeconds = 10
-const maxMem = 70 * 1024 * 1024 // 70 MB
+const maxMem = 100 * 1024 * 1024
 
 type Driver struct {
 	Workers         map[int]types.WorkerInfo
@@ -29,14 +32,6 @@ type Driver struct {
 	Cache           *PartitionCache
 	StateDir        string
 }
-
-// Serializable info about the Driver
-type DriverInfo struct {
-	Workers      map[int]types.WorkerInfo
-	PartitionMap map[int]int
-	Port         string
-}
-
 
 func newID() int {
 	return int(atomic.AddUint64(&rddCounter, 1))
@@ -73,37 +68,10 @@ func ConnectDriver(masterAddress string) *rpc.Client {
 	return client
 }
 
-func (d *Driver) GetDriver(args struct{}, reply *DriverInfo) error {
-	*reply = DriverInfo{
-		Workers:      d.Workers,
-		PartitionMap: d.PartitionMap,
-		Port:         d.Port,
-	}
-	return nil
-}
-
 func (d *Driver) RegisterWorker(info types.WorkerInfo, reply *bool) error {
 	d.Workers[info.ID] = info
 	log.Printf("Registered worker %d at %s\n", info.ID, info.Endpoint)
 	*reply = true
-	return nil
-}
-
-func (d *Driver) GetWorkerWithPartition(partitionID int, reply *int) error {
-	workerID, exists := d.PartitionMap[partitionID]
-	if !exists {
-		return fmt.Errorf("no worker found for partition %d", partitionID)
-	}
-	*reply = d.Workers[workerID].ID
-	return nil
-}
-
-func (d *Driver) GetWorker(id int, reply *int) error {
-	_, exists := d.Workers[id]
-	if !exists {
-		return fmt.Errorf("worker %d not found", id)
-	}
-	*reply = d.Workers[id].ID
 	return nil
 }
 
@@ -143,15 +111,9 @@ func (d *Driver) RegisterRDD(r *RDD) {
 	}
 }
 
-func (d *Driver) splitAndStoreData(r *RDD, lines []string) {
+func (d *Driver) splitAndStoreData(r *RDD, rows []types.Row) {
     if r.NumPartitions == 0 {
         panic("RDD.NumPartitions not set")
-    }
-
-
-    rows := make([]types.Row, len(lines))
-    for i, line := range lines {
-        rows[i] = types.Row{Key: nil, Value: line}
     }
 
     chunkSize := len(rows) / r.NumPartitions
@@ -185,13 +147,77 @@ func (d *Driver) ReadRDDTextFile(filename string, reply *int) error {
         Transformations: []types.Transformation{},
     }
 
+    rows := make([]types.Row, len(lines))
+    for i, line := range lines {
+        rows[i] = types.Row{Key: nil, Value: line}
+    }
+
     d.RegisterRDD(rdd)
-    d.splitAndStoreData(rdd, lines)
+    d.splitAndStoreData(rdd, rows)
 
     rdd.Driver = d
     *reply = rdd.ID
     return nil
 }
+
+func (d *Driver) ReadCSV(filename string, reply *int) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Printf("Error opening CSV file %s: %v\n", filename, err)
+		return err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	headers, err := reader.Read()
+	if err != nil {
+		log.Printf("Error reading CSV headers: %v\n", err)
+		return err
+	}
+
+	var result []types.Row
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("Error reading CSV record: %v\n", err)
+			continue
+		}
+
+		idx := utils.FindIndex(headers, "id")
+		key := record[idx]
+		valueMap := make(map[string]interface{})
+		for i, header := range headers {
+			if i == idx {
+				continue
+			}
+			valueMap[header] = record[i]
+		}
+
+		row := types.Row{
+			Key: key,
+			Value: valueMap,
+		}
+		result = append(result, row)
+	}
+
+    rdd := &RDD{
+        ID:              newID(),
+        Parent:          nil,
+        NumPartitions:   4,
+        Transformations: []types.Transformation{},
+    }
+	
+    d.RegisterRDD(rdd)
+    d.splitAndStoreData(rdd, result)
+    rdd.Driver = d
+
+    *reply = rdd.ID
+	return nil
+}
+
 
 func (m *Driver) Start() {
 	log.Printf("Driver server starting on port %s\n", m.Port)

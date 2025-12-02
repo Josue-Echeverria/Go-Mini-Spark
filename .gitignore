@@ -1,4 +1,5 @@
 bin/
 driver_state/
-testing/largefile.txt
-testing/numbers.txt
+testing/*
+!testing/generador.go
+partition_cache/

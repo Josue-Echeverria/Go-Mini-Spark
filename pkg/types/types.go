@@ -23,6 +23,7 @@ const (
 	FlatMapOp
 	ReduceByKeyOp
 	ShuffleOp
+	JoinOp
 )
 
 type Transformation struct {
@@ -44,12 +45,6 @@ type TaskReply struct {
 	Data   []Row
 }
 
-type Partition struct {
-	ID          int
-	Data        interface{}
-	RebuildFunc func() interface{}
-}
-
 type WorkerInfo struct {
 	ID       int
 	Endpoint string
@@ -69,4 +64,9 @@ type Heartbeat struct {
 type Row struct {
     Key   interface{}
     Value interface{}
+}
+
+type JoinRequest struct {
+	RddID1 int
+	RddID2 int
 }

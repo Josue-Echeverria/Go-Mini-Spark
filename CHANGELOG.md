@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.10.0 (2025-12-02)
+
+### Features
+
+- Advances in the implementation of Join operation
+  ([`39f714f`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/39f714f36cc02f549639ab049f20f8ae03500794))
+
+
+## v0.9.0 (2025-12-01)
+
+### Features
+
+- Implements basic reduce operation.
+  ([`8f20b31`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/8f20b31011d89c119acd4e4e5ad05d455686ceab))
+
+Implements a basic reduce operation within the Spark driver. This involves adding a transformation
+  step to the RDD pipeline and executing it on the workers. The changes also include improvements to
+  memory estimation within the cache and a diagram explaining the client-driver-worker
+  communication. The client code has been updated to use the new reduce functionality.
+
+
 ## v0.8.0 (2025-11-28)
 
 ### Features

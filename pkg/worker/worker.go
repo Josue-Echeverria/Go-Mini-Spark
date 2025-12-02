@@ -8,12 +8,10 @@ import (
 	"math/rand"
 	"net"
 	"net/rpc"
-	"strings"
 	"time"
 )
 
 const heartBeatInterval = 2
-const longFuncValue = 5
 
 type Worker struct {
 	ID            int
@@ -24,40 +22,6 @@ type Worker struct {
 	DriverAddress string
 	LastHeartbeat time.Time
 	ActiveTasks   int
-}
-
-var FuncRegistry = map[string]interface{}{
-    "ToUpper": func(r types.Row) types.Row {
-		str, ok := r.Value.(string)
-		if !ok {
-			log.Printf("ToUpper: expected string but got %T\n", r.Value)
-			return types.Row{Key: r.Key, Value: r.Value}
-		}
-		return types.Row{Key: r.Key, Value: strings.ToUpper(str)}
-    },
-
-    "IsLong": func(r types.Row) bool {
-        str, ok := r.Value.(string)
-		if !ok {
-			log.Printf("IsLong: expected string but got %T\n", r.Value)
-			return false
-		}
-		return len(str) > longFuncValue
-    },
-
-    "SplitWords": func(r types.Row) []types.Row {
-        str, ok := r.Value.(string)
-		if !ok {
-			log.Printf("SplitWords: expected string but got %T\n", r.Value)
-			return []types.Row{}
-		}
-		words := strings.Fields(str)
-		rows := make([]types.Row, len(words))
-		for i, word := range words {
-			rows[i] = types.Row{Key: r.Key, Value: word}
-		}
-		return rows
-    },
 }
 
 func NewWorker(driverAddress, address string, maxTasks int) *Worker {
@@ -76,7 +40,7 @@ func NewWorker(driverAddress, address string, maxTasks int) *Worker {
 }
 
 func ExecuteTransformation(w *Worker, t types.Transformation, data []types.Row) ([]types.Row, error) {
-	_, exists := FuncRegistry[t.FuncName]
+	_, exists := utils.FuncRegistry[t.FuncName]
 	if !exists {
 		return nil, fmt.Errorf("transformation function '%s' not found", t.FuncName)
 	}
@@ -84,21 +48,22 @@ func ExecuteTransformation(w *Worker, t types.Transformation, data []types.Row) 
 	log.Printf("Worker %d executing transformation %s of type %d\n", w.ID, t.FuncName, t.Type)
 	switch t.Type {
 	case types.MapOp:
-		fn := FuncRegistry[t.FuncName].(func(types.Row) types.Row)
+		fn := utils.FuncRegistry[t.FuncName].(func(types.Row) types.Row)
 		data = utils.Map(data, fn)
 
 	case types.FilterOp:
-		fn := FuncRegistry[t.FuncName].(func(types.Row) bool)
+		fn := utils.FuncRegistry[t.FuncName].(func(types.Row) bool)
 		data = utils.Filter(data, fn)
 
 	case types.FlatMapOp:
-		fn := FuncRegistry[t.FuncName].(func(types.Row) []types.Row)
+		fn := utils.FuncRegistry[t.FuncName].(func(types.Row) []types.Row)
 		data = utils.FlatMap(data, fn)
 
-		// case types.ReduceOp: TODO
-		//     fn := FuncRegistry[t.FuncName].(func(string, string) string)
-		//     result := utils.Reduce(data, fn)
-		//     data = []string{result}
+	case types.ReduceOp: 
+		fn := utils.FuncRegistry[t.FuncName].(func(types.Row, types.Row) types.Row)
+		result := utils.Reduce(data, fn)
+		data = []types.Row{result}
+
 	default:
 		return nil, fmt.Errorf("unsupported transformation type %d", t.Type)
 	}
@@ -127,7 +92,7 @@ func (w *Worker) ExecuteTask(task types.Task, reply *types.TaskReply) error {
 	}
 
 	reply.Data = data
-	log.Printf("completed task %d with %s results\n", task.ID, data)
+	// log.Printf("completed task %d with %s results\n", task.ID, data)
 	return nil
 }
 
@@ -135,13 +100,6 @@ func (w *Worker) ExecuteTask(task types.Task, reply *types.TaskReply) error {
 func (w *Worker) GetStatus(args struct{}, reply *int) error {
 	*reply = w.Status
 	return nil
-}
-
-// StorePartition stores a partition on this worker
-func (w *Worker) StorePartition(partitionID int, rows []types.Row) error {
-    w.Partition[partitionID] = rows
-    log.Printf("Worker %d stored partition %d with %d rows\n", w.ID, partitionID, len(rows))
-    return nil
 }
 
 func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
@@ -152,7 +110,11 @@ func (w *Worker) RegisterPartition(partitionID int, reply *bool) error {
 	return nil
 }
 
-func SendResultToDriver(result string) {
+func (w *Worker) UnregisterPartition(partitionID int, reply *bool) error {
+	delete(w.Partition, partitionID)
+	log.Printf("Worker %d unregistered partition %d\n", w.ID, partitionID)
+	*reply = true
+	return nil
 }
 
 // SendHeartbeat envía un heartbeat al driver
