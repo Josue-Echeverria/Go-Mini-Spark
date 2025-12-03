@@ -31,14 +31,59 @@ Un sistema de procesamiento distribuido implementado en Go que soporta trabajos 
 
 ## Uso
 
-### Construcción
+### Opción 1: Docker Compose (Recomendado)
+
+#### Iniciar todo el sistema con un comando:
 ```bash
-scripts\build.bat
+.\docker-start.bat
 ```
 
-### Inicio del sistema
+Esto construirá las imágenes Docker e iniciará:
+- Driver en el puerto 9000
+- 4 Workers en los puertos 9100-9103
+- Red interna para comunicación entre servicios
+
+#### Usar el cliente desde Docker:
 ```bash
-scripts\start.bat
+# Enviar trabajo
+.\docker-client.bat submit-job example.json
+
+# Consultar estado
+.\docker-client.bat status job-abc123
+
+# Obtener resultados
+.\docker-client.bat results job-abc123
+
+# Ver progreso en tiempo real
+.\docker-client.bat watch job-abc123
+```
+
+#### Comandos útiles de Docker:
+```bash
+# Ver logs de todos los servicios
+docker-compose logs -f
+
+# Ver logs de un servicio específico
+docker-compose logs -f driver
+docker-compose logs -f worker1
+
+# Detener servicios
+docker-compose down
+
+# Limpiar todo (contenedores, imágenes, volúmenes)
+.\docker-stop.bat
+```
+
+### Opción 2: Compilación Local
+
+#### Construcción
+```bash
+.\build.bat
+```
+
+#### Inicio del sistema
+```bash
+.\start.bat
 ```
 
 ### Uso del cliente

@@ -3,12 +3,14 @@ package client
 import (
 	"bytes"
 	"encoding/json"
-	"Go-Mini-Spark/pkg/types"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"Go-Mini-Spark/pkg/types"
 )
 
 // Client holds the HTTP client and base URL
@@ -95,4 +97,68 @@ func (c *Client) GetJobResults(jobID string) (*types.ResultsResponse, error) {
 	}
 
 	return &results, nil
+}
+
+// ServeHTTP starts the client API server
+func (c *Client) ServeHTTP(port string) error {
+	http.HandleFunc("/api/v1/jobs", c.handleJobs)
+	http.HandleFunc("/health", c.handleHealth)
+	http.HandleFunc("/", c.handleRoot)
+
+	addr := ":" + port
+	log.Printf("Client API server starting on %s", addr)
+	log.Printf("Master URL: %s", c.BaseURL)
+	log.Printf("\nAvailable endpoints:")
+	log.Printf("  POST   /api/v1/jobs           - Submit job")
+	log.Printf("  GET    /api/v1/jobs/{id}      - Get job status")
+	log.Printf("  GET    /api/v1/jobs/{id}/results - Get job results")
+	log.Printf("  GET    /health                - Health check")
+
+	return http.ListenAndServe(addr, nil)
+}
+
+func (c *Client) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+}
+
+func (c *Client) handleRoot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"service": "Go-Mini-Spark Client API",
+		"version": "1.0.0",
+		"endpoints": []string{
+			"POST /api/v1/jobs",
+			"GET /api/v1/jobs/{id}",
+			"GET /api/v1/jobs/{id}/results",
+			"GET /health",
+		},
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func (c *Client) handleJobs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var jobReq types.JobRequest
+	if err := json.NewDecoder(r.Body).Decode(&jobReq); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Submitting job '%s' to master", jobReq.Name)
+	jobResp, err := c.SubmitJob(jobReq)
+	if err != nil {
+		log.Printf("Error submitting job: %v", err)
+		http.Error(w, fmt.Sprintf("Error submitting job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(jobResp)
 }

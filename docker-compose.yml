@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Driver service - builds the image first
+  driver:
+    build: .
+    image: go-mini-spark:local
+    container_name: go-mini-spark-driver
+    ports:
+      - "9000:9000"
+    command: ["/app/bin/driver", "-port", "9000"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+    networks:
+      - spark-network
+
+  # Worker services - use the built image
+  worker1:
+    image: go-mini-spark:local
+    container_name: go-mini-spark-worker1
+    ports:
+      - "9100:9100"
+    command: ["/app/bin/worker", "-driver", "driver:9000", "-address", "0.0.0.0:9100", "-max-tasks", "10"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      - driver
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  worker2:
+    image: go-mini-spark:local
+    container_name: go-mini-spark-worker2
+    ports:
+      - "9101:9101"
+    command: ["/app/bin/worker", "-driver", "driver:9000", "-address", "0.0.0.0:9101", "-max-tasks", "10"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      - driver
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  worker3:
+    image: go-mini-spark:local
+    container_name: go-mini-spark-worker3
+    ports:
+      - "9102:9102"
+    command: ["/app/bin/worker", "-driver", "driver:9000", "-address", "0.0.0.0:9102", "-max-tasks", "10"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      - driver
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  worker4:
+    image: go-mini-spark:local
+    container_name: go-mini-spark-worker4
+    ports:
+      - "9103:9103"
+    command: ["/app/bin/worker", "-driver", "driver:9000", "-address", "0.0.0.0:9103", "-max-tasks", "10"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      - driver
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  # Client service
+  client:
+    image: go-mini-spark:local
+    container_name: go-mini-spark-client
+    ports:
+      - "8081:8081"
+    command: ["/app/bin/client", "-url", "http://driver:9000", "-port", "8081"]
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    depends_on:
+      - driver
+      - worker1
+      - worker2
+      - worker3
+      - worker4
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+networks:
+  spark-network:
+    driver: bridge
+
+volumes:
+  spark-data:
+    driver: local
+  spark-output:
+    driver: local

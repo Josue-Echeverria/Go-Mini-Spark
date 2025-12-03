@@ -1,0 +1,67 @@
+# Build artifacts
+bin/
+*.exe
+
+# Large data files
+data/
+output/
+logs/
+*.csv
+*.json
+*.jsonl
+*.log
+*.db
+*.sqlite
+*.tmp
+
+# Git (can be huge)
+.git/
+.gitignore
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Docker files
+.dockerignore
+Dockerfile*
+docker-compose*
+
+# Documentation
+*.md
+CHANGELOG.md
+README.md
+docs/
+
+# Scripts
+*.bat
+*.sh
+
+# Go artifacts
+vendor/
+*.sum
+
+# Test files
+testing/
+*.test
+
+# Node modules (if any)
+node_modules/
+
+# Python cache (if any)
+__pycache__/
+*.pyc
+
+# Large files patterns
+*.zip
+*.tar.gz
+*.tar
+*.rar

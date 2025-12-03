@@ -1,14 +1,17 @@
 package driver
 
 import (
+	"Go-Mini-Spark/pkg/types"
 	"fmt"
 	"log"
 	"time"
-	"Go-Mini-Spark/pkg/types"
-)	
+)
 
 // GetAliveWorkers retorna la lista de workers activos
 func (d *Driver) GetAliveWorkers() []int {
+	d.WorkerMutex.Lock()
+	defer d.WorkerMutex.Unlock()
+
 	var alive []int
 	for workerID := range d.Workers {
 		if d.IsWorkerAlive(workerID) {
@@ -20,6 +23,9 @@ func (d *Driver) GetAliveWorkers() []int {
 
 // WorkerHeartbeat registra el heartbeat de un worker
 func (d *Driver) WorkerHeartbeat(heartbeat types.Heartbeat, reply *bool) error {
+	d.WorkerMutex.Lock()
+	defer d.WorkerMutex.Unlock()
+
 	worker, exists := d.Workers[heartbeat.ID]
 	if !exists {
 		d.Workers[heartbeat.ID] = types.WorkerInfo{
@@ -84,16 +90,25 @@ func (d *Driver) handleWorkerFailure(workerID int) {
 		d.reassignPartitions(partitionsToReassign)
 	}
 
+	d.WorkerMutex.Lock()
 	d.Workers[workerID] = types.WorkerInfo{
 		ID:       workerID,
 		Endpoint: d.Workers[workerID].Endpoint,
 		Status:   500, // marcar como inactivo
 	}
+	d.WorkerMutex.Unlock()
 }
 
 // checkWorkerHealth verifica la salud de todos los workers registrados
 func (d *Driver) checkWorkerHealth() {
-	for workerID, worker := range d.Workers {
+	d.WorkerMutex.Lock()
+	workersCopy := make(map[int]types.WorkerInfo)
+	for k, v := range d.Workers {
+		workersCopy[k] = v
+	}
+	d.WorkerMutex.Unlock()
+
+	for workerID, worker := range workersCopy {
 		if worker.Status == 500 {
 			continue // ya está marcado como inactivo
 		}

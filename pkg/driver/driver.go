@@ -11,6 +11,7 @@ import (
 	"io"
 	"encoding/csv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"fmt"
 )
@@ -32,6 +33,7 @@ type Driver struct {
 	nextPartitionID int
 	Cache           *PartitionCache
 	StateDir        string
+	WorkerMutex     sync.Mutex
 }
 // Source - https://stackoverflow.com/a
 // Posted by Andrew
