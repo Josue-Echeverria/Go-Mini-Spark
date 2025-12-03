@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.12.0 (2025-12-03)
+
+### Features
+
+- Deleted unnecesary stuff
+  ([`68ad408`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/68ad408832f9229bf7c3be838f6ac953f6cdb902))
+
+
 ## v0.11.0 (2025-12-02)
 
 
