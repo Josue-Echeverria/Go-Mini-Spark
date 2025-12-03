@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"Go-Mini-Spark/pkg/client"
 )
 
 func main() {
@@ -12,34 +13,25 @@ func main() {
 
 	args := flag.Args()
 	if len(args) < 1 {
-		printUsage()
 		os.Exit(1)
 	}
 
-	client := NewClient(*masterURL)
+	client := client.NewClient(*masterURL)
 	command := args[0]
 	commandArgs := args[1:]
 
 	var err error
 	switch command {
-	case "submit-job":
-		err = submitJobCommand(client, commandArgs)
-	case "submit-topology":
-		err = submitTopologyCommand(client, commandArgs)
-	case "status":
-		err = statusCommand(client, commandArgs)
-	case "results":
-		err = resultsCommand(client, commandArgs)
-	case "watch":
-		err = watchCommand(client, commandArgs)
-	case "ingest":
-		err = ingestCommand(client, commandArgs)
-	case "help", "-h", "--help":
-		printUsage()
-		os.Exit(0)
+    case "submit-job":
+        err = client.SubmitJobCommand(commandArgs)
+    case "status":
+        err = client.StatusCommand(commandArgs)
+    case "results":
+        err = client.ResultsCommand(commandArgs)
+    case "watch":
+        err = client.WatchCommand(commandArgs)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
-		printUsage()
 		os.Exit(1)
 	}
 

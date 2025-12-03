@@ -81,3 +81,30 @@ type JoinRequest struct {
 	RddID1 int
 	RddID2 int
 }
+
+// JobRequest represents a batch job submission request
+type JobRequest struct {
+	Name        string                 `json:"name"`
+	Parallelism int                    `json:"parallelism"`
+	Config      map[string]interface{} `json:"config,omitempty"`
+}
+
+// JobResponse represents the response for job/topology operations
+type JobResponse struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Status      string                 `json:"status"`
+	Progress    float64                `json:"progress"`
+	CreatedAt   string                 `json:"created_at"`
+	CompletedAt string                 `json:"completed_at,omitempty"`
+	Metrics     map[string]interface{} `json:"metrics,omitempty"`
+	Error       string                 `json:"error,omitempty"`
+}
+
+// ResultsResponse represents the results of a completed job
+type ResultsResponse struct {
+	JobID  string   `json:"job_id"`
+	Paths  []string `json:"paths"`
+	Format string   `json:"format"`
+	Size   int64    `json:"size"`
+}

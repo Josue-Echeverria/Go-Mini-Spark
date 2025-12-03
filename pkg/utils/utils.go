@@ -12,7 +12,9 @@ import (
 	"Go-Mini-Spark/pkg/types"
 	"strings"
 	"hash/fnv"
+	"path/filepath"
 )
+
 
 const longFuncValue = 5
 
@@ -365,4 +367,25 @@ func FindIndex(slice []string, target string) int {
         }
     }
     return -1
+}
+
+func CopyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
 }

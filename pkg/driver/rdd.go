@@ -266,7 +266,7 @@ func (d *Driver) Join(request types.JoinRequest, reply *int) error {
     wg.Wait()
 
     flatJoined := utils.FlattenPartition(joinedPartitions)
-    utils.WriteCSV("result.csv", flatJoined) // escribir solo la primera partición como ejemplo)
+    utils.WriteCSV("testing/result.csv", flatJoined) 
 
     return nil
 }

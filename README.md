@@ -43,78 +43,151 @@ scripts\start.bat
 
 ### Uso del cliente
 
-#### Enviar un trabajo batch
+El cliente CLI permite interactuar con el sistema distribuido mediante comandos simples.
+
+#### Comandos disponibles
+- `submit-job` - Enviar un trabajo para procesamiento
+- `status` - Consultar estado de un trabajo
+- `results` - Obtener resultados de un trabajo completado  
+- `watch` - Monitorear progreso en tiempo real
+
+#### Ejemplos de uso
+
+**Enviar un trabajo:**
 ```bash
-bin\client.exe localhost:8080 submit batch "Mi Trabajo"
-bin\client.exe localhost:8080 submit batch "Multiplicar" '{"operation":"multiply","factor":3,"task_count":5}'
+bin\client.exe submit-job <argumentos>
 ```
 
-#### Consultar estado de un trabajo
+**Consultar estado:**
 ```bash
-bin\client.exe localhost:8080 status <job_id>
+bin\client.exe status <job_id>
 ```
 
-#### Esperar completación de un trabajo
+**Obtener resultados:**
 ```bash
-bin\client.exe localhost:8080 wait <job_id>
+bin\client.exe results <job_id>
 ```
 
-## API REST
+**Monitorear progreso:**
+```bash
+bin\client.exe watch <job_id>
+```
 
-### Master (puerto 8080)
+## API del Cliente
 
-#### Registrar Worker
-```http
-POST /api/workers/register
-Content-Type: application/json
+### URL Base
+```
+http://localhost:8080
+```
 
+### Content Type
+Todas las requests y responses usan `application/json`.
+
+### Códigos de Estado HTTP
+- `200 OK` - Éxito
+- `201 Created` - Recurso creado
+- `400 Bad Request` - Request inválido  
+- `404 Not Found` - Recurso no encontrado
+- `500 Internal Server Error` - Error del servidor
+
+### Endpoints
+
+#### 1. Enviar Trabajo Batch
+**Endpoint:** `POST /api/v1/jobs`
+
+**Request Body:**
+```json
 {
-  "address": "localhost:8081",
-  "max_tasks": 10
+  "name": "string",
+  "dag": {
+    "nodes": [
+      {
+        "id": "string",
+        "op": "string", 
+        "path": "string (opcional)",
+        "partitions": "integer (opcional)",
+        "fn": "string (opcional)",
+        "key": "string (opcional)",
+        "args": {}
+      }
+    ],
+    "edges": [["string", "string"]]
+  },
+  "parallelism": "integer",
+  "config": {}
 }
 ```
 
-#### Heartbeat
-```http
-POST /api/workers/heartbeat
-Content-Type: application/json
-
+**Response:** `201 Created`
+```json
 {
-  "worker_id": "worker-id",
-  "status": "active",
-  "active_tasks": 2,
-  "metrics": {},
-  "timestamp": "2024-01-01T12:00:00Z"
+  "id": "job-abc123",
+  "name": "wordcount-batch", 
+  "status": "ACCEPTED",
+  "progress": 0.0,
+  "created_at": "2024-12-02T10:00:00Z",
+  "metrics": {}
 }
 ```
 
-#### Enviar Trabajo
-```http
-POST /api/jobs
-Content-Type: application/json
+#### 2. Obtener Estado del Trabajo
+**Endpoint:** `GET /api/v1/jobs/{id}`
 
+**Response:** `200 OK`
+```json
 {
-  "name": "Mi Trabajo",
-  "type": "batch",
-  "config": {
-    "operation": "multiply",
-    "factor": 2,
-    "task_count": 3
-  }
+  "id": "job-abc123",
+  "name": "wordcount-batch",
+  "status": "RUNNING|ACCEPTED|SUCCEEDED|FAILED",
+  "progress": 45.5,
+  "created_at": "2024-12-02T10:00:00Z", 
+  "completed_at": "2024-12-02T10:05:30Z",
+  "metrics": {
+    "tasks_completed": 18,
+    "tasks_total": 40,
+    "tasks_failed": 0,
+    "throughput": 1500,
+    "cpu_usage": 65.3,
+    "memory_usage": 512000000
+  },
+  "error": "string (si falló)"
 }
 ```
 
-#### Consultar Estado del Trabajo
-```http
-GET /api/jobs/{job_id}
+#### 3. Obtener Resultados del Trabajo
+**Endpoint:** `GET /api/v1/jobs/{id}/results`
+
+**Response:** `200 OK`
+```json
+{
+  "job_id": "job-abc123",
+  "paths": [
+    "/output/job-abc123/part-00000.csv",
+    "/output/job-abc123/part-00001.csv"
+  ],
+  "format": "csv|jsonl",
+  "size": 1048576
+}
 ```
 
-### Worker (puerto 808X)
+### Estados de Trabajo
+- `ACCEPTED` - Trabajo recibido y en cola
+- `RUNNING` - Trabajo ejecutándose
+- `SUCCEEDED` - Trabajo completado exitosamente
+- `FAILED` - Trabajo falló con error
 
-#### Estado del Worker
-```http
-GET /api/status
-```
+### Operadores Batch
+| Operador | Descripción | Campos Requeridos |
+|----------|-------------|-------------------|
+| `read_csv` | Leer archivos CSV | `path`, `partitions` |
+| `read_jsonl` | Leer archivos JSONL | `path`, `partitions` |
+| `map` | Transformar elementos | `fn` |
+| `filter` | Filtrar elementos | `fn` |
+| `flat_map` | Transformación flat map | `fn` |
+| `reduce` | Operación reduce | `fn` |
+| `reduce_by_key` | Reduce por clave | `key`, `fn` |
+| `join` | Unir dos datasets | `key` |
+| `aggregate` | Agregación personalizada | `fn` |
 
 ## Estructura del Proyecto
 
