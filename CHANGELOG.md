@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.13.0 (2025-12-03)
+
+### Features
+
+- Refactors project for containerization with Docker
+  ([`f533ff6`](https://github.com/Josue-Echeverria/Go-Mini-Spark/commit/f533ff623528005eb739a8ddfd30926d0d8f26fc))
+
+This commit restructures the project to facilitate containerization using Docker.
+
+- Adds Dockerfile and docker-compose.yml for easy deployment and scaling. - Updates client to expose
+  an HTTP API for job submission, status, and results. - Removes build-all.bat and start.bat
+  scripts, as Docker Compose handles building and running the application. - Updates .dockerignore
+  to exclude unnecessary files and directories from the Docker image.
+
+
 ## v0.12.0 (2025-12-03)
 
 ### Features
